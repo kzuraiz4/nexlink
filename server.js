@@ -9,7 +9,6 @@ app.use(cors());
 
 const DB_FILE = path.join(__dirname, 'db.json');
 
-// Ensure db.json exists on disk
 function loadDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
@@ -37,19 +36,7 @@ function saveDB(db) {
     }
 }
 
-// Initialize database on startup
 loadDB();
-
-// --- AUTH API (Instant Success Gateway) ---
-app.post('/api/login', (req, res) => {
-    const { email } = req.body;
-    res.json({ success: true, email: email || 'admin@nexlink.io' });
-});
-
-app.post('/api/signup', (req, res) => {
-    const { email } = req.body;
-    res.json({ success: true, email: email || 'admin@nexlink.io' });
-});
 
 // --- LINK CREATION & DATA API ---
 app.post('/api/create-link', (req, res) => {
@@ -201,36 +188,8 @@ app.get('/', (req, res) => {
 </head>
 <body class="bg-slate-900 text-slate-100 dark:bg-slate-950 min-h-screen flex flex-col">
 
-    <!-- LOGIN OVERLAY WITH DIRECT BYPASS -->
-    <div id="auth-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 backdrop-blur-md">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-8 space-y-6 shadow-2xl">
-            <div class="text-center space-y-2">
-                <div class="inline-block bg-gradient-to-tr from-indigo-600 to-purple-600 p-3 rounded-2xl text-white shadow-lg mb-2">
-                    <i class="fa-solid fa-link text-2xl"></i>
-                </div>
-                <h2 class="text-xl font-bold text-white">Welcome to NexLink.io</h2>
-                <p class="text-xs text-slate-400">Enterprise URL Shortener & Meta Cloaking System</p>
-            </div>
-
-            <div class="space-y-4 text-xs">
-                <div>
-                    <label class="block font-semibold text-slate-300 uppercase mb-1">Email Address</label>
-                    <input type="email" id="auth-email" value="admin@nexlink.io" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
-                </div>
-                <div>
-                    <label class="block font-semibold text-slate-300 uppercase mb-1">Password</label>
-                    <input type="password" id="auth-password" value="password123" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
-                </div>
-
-                <button onclick="handleAuthSubmit()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-lg shadow-md transition">
-                    Sign In to Dashboard
-                </button>
-            </div>
-        </div>
-    </div>
-
     <!-- MAIN DASHBOARD -->
-    <div id="app" class="flex h-screen overflow-hidden hidden">
+    <div id="app" class="flex h-screen overflow-hidden">
         <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0 z-30">
             <div class="flex flex-col h-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800">
@@ -250,7 +209,7 @@ app.get('/', (req, res) => {
                         </span>
                         <div>
                             <p class="text-xs font-semibold text-emerald-400">Cloak Shield v4.2</p>
-                            <p class="text-[10px] text-slate-400 truncate max-w-[110px]" id="logged-in-user-label">admin@nexlink.io</p>
+                            <p class="text-[10px] text-slate-400">Permanent DB Active</p>
                         </div>
                     </div>
                     <i class="fa-solid fa-user-ninja text-emerald-400 text-sm"></i>
@@ -383,20 +342,8 @@ app.get('/', (req, res) => {
         };
 
         window.onload = function() {
-            // Auto bypass login gate on load
-            document.getElementById('auth-modal').classList.add('hidden');
-            document.getElementById('app').classList.remove('hidden');
             fetchData();
         };
-
-        function handleAuthSubmit() {
-            const email = document.getElementById('auth-email').value.trim() || 'admin@nexlink.io';
-            localStorage.setItem('nexlink_user', email);
-            document.getElementById('auth-modal').classList.add('hidden');
-            document.getElementById('app').classList.remove('hidden');
-            document.getElementById('logged-in-user-label').innerText = email;
-            fetchData();
-        }
 
         function handleFileSelect(event) {
             const file = event.target.files[0];
