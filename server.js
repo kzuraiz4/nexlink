@@ -7,13 +7,14 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-const DB_FILE = path.join(__dirname, 'db.json');
+// Use absolute path for reliability on cloud servers
+const DB_FILE = path.resolve(__dirname, 'db.json');
 
 function loadDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
             const data = fs.readFileSync(DB_FILE, 'utf8');
-            if (data.trim().length > 0) {
+            if (data && data.trim().length > 0) {
                 const parsed = JSON.parse(data);
                 if (!parsed.links) parsed.links = {};
                 return parsed;
@@ -24,11 +25,7 @@ function loadDB() {
     }
 
     const defaultDB = { links: {} };
-    try {
-        fs.writeFileSync(DB_FILE, JSON.stringify(defaultDB, null, 2), 'utf8');
-    } catch (e) {
-        console.error("Error writing default database:", e);
-    }
+    saveDB(defaultDB);
     return defaultDB;
 }
 
@@ -40,6 +37,7 @@ function saveDB(db) {
     }
 }
 
+// Initialize database on startup
 loadDB();
 
 // --- API ENDPOINTS ---
@@ -550,7 +548,7 @@ app.get('/', (req, res) => {
                 if(res.ok) {
                     closeCreateModal();
                     await fetchData();
-                    alert("Success! Working short link generated:\\n" + data.shortUrl);
+                    alert("Success! Working short link generated:\n" + data.shortUrl);
                 } else {
                     alert("Failed to create link.");
                 }
