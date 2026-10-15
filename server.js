@@ -188,7 +188,6 @@ app.get('/', (req, res) => {
 </head>
 <body class="bg-slate-900 text-slate-100 dark:bg-slate-950 min-h-screen flex flex-col">
 
-    <!-- MAIN DASHBOARD -->
     <div id="app" class="flex h-screen overflow-hidden">
         <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0 z-30">
             <div class="flex flex-col h-full">
@@ -517,41 +516,4 @@ app.get('/', (req, res) => {
             const previewDescription = document.getElementById('modal-preview-desc').value;
             const previewImage = document.getElementById('modal-preview-image').value;
 
-            if(!targetUrl) { alert('Please enter a destination URL'); return; }
-
-            try {
-                const res = await fetch('/api/create-link', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        targetUrl, safeUrl, customSlug, domainPrefix, 
-                        title, previewTitle, previewDescription, previewImage 
-                    })
-                });
-
-                const data = await res.json();
-                if(res.ok) {
-                    closeCreateModal();
-                    await fetchData();
-                    alert("Success! Working short link generated:\n" + data.shortUrl);
-                } else {
-                    alert("Failed to create link.");
-                }
-            } catch(e) {
-                alert("Server error connecting to backend.");
-            }
-        }
-
-        function openCreateModal() { 
-            uploadedImageBase64 = "";
-            showImagePreview("");
-            document.getElementById('create-modal').classList.remove('hidden'); 
-        }
-        function closeCreateModal() { document.getElementById('create-modal').classList.add('hidden'); }
-    </script>
-</body>
-</html>`);
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+            if(!targetUrl) { alert('Please enter a destination URL'); return;
