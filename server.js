@@ -9,14 +9,13 @@ app.use(cors());
 
 const DB_FILE = path.join(__dirname, 'db.json');
 
-// Ensure db.json exists on disk with default admin user
+// Ensure db.json exists on disk
 function loadDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
             const data = fs.readFileSync(DB_FILE, 'utf8');
             if (data.trim().length > 0) {
                 const parsed = JSON.parse(data);
-                if (!parsed.users) parsed.users = [];
                 if (!parsed.links) parsed.links = {};
                 return parsed;
             }
@@ -25,11 +24,7 @@ function loadDB() {
         console.error("Error reading database file:", e);
     }
 
-    // Default structure saved immediately to disk
-    const defaultDB = {
-        users: [{ email: "admin@nexlink.io", password: "password123" }],
-        links: {}
-    };
+    const defaultDB = { links: {} };
     saveDB(defaultDB);
     return defaultDB;
 }
@@ -45,34 +40,15 @@ function saveDB(db) {
 // Initialize database on startup
 loadDB();
 
-// --- AUTH API ENDPOINTS ---
-app.post('/api/signup', (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
-
-    const db = loadDB();
-    const existingUser = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (existingUser) {
-        return res.status(400).json({ message: 'User already exists with this email.' });
-    }
-
-    db.users.push({ email: email.toLowerCase(), password });
-    saveDB(db);
-    res.json({ success: true, email: email.toLowerCase() });
+// --- AUTH API (Instant Success Gateway) ---
+app.post('/api/login', (req, res) => {
+    const { email } = req.body;
+    res.json({ success: true, email: email || 'admin@nexlink.io' });
 });
 
-app.post('/api/login', (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
-
-    const db = loadDB();
-    const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
-    
-    if (user) {
-        res.json({ success: true, email: user.email });
-    } else {
-        res.status(401).json({ message: 'Invalid email or password.' });
-    }
+app.post('/api/signup', (req, res) => {
+    const { email } = req.body;
+    res.json({ success: true, email: email || 'admin@nexlink.io' });
 });
 
 // --- LINK CREATION & DATA API ---
@@ -225,36 +201,30 @@ app.get('/', (req, res) => {
 </head>
 <body class="bg-slate-900 text-slate-100 dark:bg-slate-950 min-h-screen flex flex-col">
 
-    <!-- LOGIN / SIGNUP MODAL -->
+    <!-- LOGIN OVERLAY WITH DIRECT BYPASS -->
     <div id="auth-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 backdrop-blur-md">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-8 space-y-6 shadow-2xl">
             <div class="text-center space-y-2">
                 <div class="inline-block bg-gradient-to-tr from-indigo-600 to-purple-600 p-3 rounded-2xl text-white shadow-lg mb-2">
                     <i class="fa-solid fa-link text-2xl"></i>
                 </div>
-                <h2 class="text-xl font-bold text-white" id="auth-title">Welcome to NexLink.io</h2>
+                <h2 class="text-xl font-bold text-white">Welcome to NexLink.io</h2>
                 <p class="text-xs text-slate-400">Enterprise URL Shortener & Meta Cloaking System</p>
             </div>
 
             <div class="space-y-4 text-xs">
                 <div>
                     <label class="block font-semibold text-slate-300 uppercase mb-1">Email Address</label>
-                    <input type="email" id="auth-email" placeholder="admin@nexlink.io" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                    <input type="email" id="auth-email" value="admin@nexlink.io" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                 </div>
                 <div>
                     <label class="block font-semibold text-slate-300 uppercase mb-1">Password</label>
-                    <input type="password" id="auth-password" placeholder="••••••••" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                    <input type="password" id="auth-password" value="password123" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                 </div>
 
-                <button onclick="handleAuthSubmit()" id="auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-lg shadow-md transition">
+                <button onclick="handleAuthSubmit()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-lg shadow-md transition">
                     Sign In to Dashboard
                 </button>
-
-                <div class="text-center pt-2">
-                    <button onclick="toggleAuthMode()" class="text-indigo-400 hover:underline text-xs" id="auth-toggle-text">
-                        Need an account? Sign up
-                    </button>
-                </div>
             </div>
         </div>
     </div>
@@ -280,7 +250,7 @@ app.get('/', (req, res) => {
                         </span>
                         <div>
                             <p class="text-xs font-semibold text-emerald-400">Cloak Shield v4.2</p>
-                            <p class="text-[10px] text-slate-400 truncate max-w-[110px]" id="logged-in-user-label">Permanent DB Active</p>
+                            <p class="text-[10px] text-slate-400 truncate max-w-[110px]" id="logged-in-user-label">admin@nexlink.io</p>
                         </div>
                     </div>
                     <i class="fa-solid fa-user-ninja text-emerald-400 text-sm"></i>
@@ -305,12 +275,6 @@ app.get('/', (req, res) => {
                     <a href="#" onclick="switchTab('team')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-user-group w-6 text-center"></i><span class="ml-2">Team</span></a>
                     <a href="#" onclick="switchTab('settings')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-gear w-6 text-center"></i><span class="ml-2">Settings</span></a>
                 </nav>
-
-                <div class="p-3 border-t border-slate-800">
-                    <button onclick="handleLogout()" class="w-full bg-slate-800 hover:bg-rose-900/40 text-slate-300 hover:text-rose-400 text-xs py-2 rounded-lg transition">
-                        <i class="fa-solid fa-right-from-bracket mr-1"></i> Sign Out
-                    </button>
-                </div>
             </div>
         </aside>
 
@@ -347,7 +311,6 @@ app.get('/', (req, res) => {
                 <div>
                     <label class="block font-semibold text-slate-200 uppercase mb-1">Destination</label>
                     <input type="url" id="modal-target-url" placeholder="https://example.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
-                    <p class="text-[11px] text-slate-500 mt-1">Where visitors go by default.</p>
                 </div>
 
                 <div class="grid grid-cols-3 gap-2">
@@ -380,7 +343,6 @@ app.get('/', (req, res) => {
                         <i class="fa-regular fa-image"></i>
                         <span>Link preview</span>
                     </div>
-                    <p class="text-[11px] text-slate-400">What people see when this link is shared on WhatsApp, Slack, X and similar.</p>
                     
                     <input type="text" id="modal-preview-title" placeholder="Preview title" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
                     <input type="text" id="modal-preview-desc" placeholder="Preview description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
@@ -413,7 +375,6 @@ app.get('/', (req, res) => {
     </div>
 
     <script>
-        let isSignupMode = false;
         let uploadedImageBase64 = "";
 
         const state = {
@@ -422,14 +383,20 @@ app.get('/', (req, res) => {
         };
 
         window.onload = function() {
-            const currentUser = localStorage.getItem('nexlink_user');
-            if (currentUser) {
-                document.getElementById('auth-modal').classList.add('hidden');
-                document.getElementById('app').classList.remove('hidden');
-                document.getElementById('logged-in-user-label').innerText = currentUser;
-                fetchData();
-            }
+            // Auto bypass login gate on load
+            document.getElementById('auth-modal').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            fetchData();
         };
+
+        function handleAuthSubmit() {
+            const email = document.getElementById('auth-email').value.trim() || 'admin@nexlink.io';
+            localStorage.setItem('nexlink_user', email);
+            document.getElementById('auth-modal').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            document.getElementById('logged-in-user-label').innerText = email;
+            fetchData();
+        }
 
         function handleFileSelect(event) {
             const file = event.target.files[0];
@@ -467,50 +434,6 @@ app.get('/', (req, res) => {
                 imgTag.classList.add('hidden');
                 placeholder.classList.remove('hidden');
             }
-        }
-
-        function toggleAuthMode() {
-            isSignupMode = !isSignupMode;
-            document.getElementById('auth-title').innerText = isSignupMode ? 'Create an Account' : 'Welcome to NexLink.io';
-            document.getElementById('auth-btn').innerText = isSignupMode ? 'Sign Up' : 'Sign In to Dashboard';
-            document.getElementById('auth-toggle-text').innerText = isSignupMode ? 'Already have an account? Sign in' : 'Need an account? Sign up';
-        }
-
-        async function handleAuthSubmit() {
-            const email = document.getElementById('auth-email').value.trim();
-            const password = document.getElementById('auth-password').value.trim();
-
-            if (!email || !password) {
-                alert('Please enter both email and password.');
-                return;
-            }
-
-            const endpoint = isSignupMode ? '/api/signup' : '/api/login';
-            try {
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-                const data = await res.json();
-
-                if (res.ok) {
-                    localStorage.setItem('nexlink_user', email);
-                    document.getElementById('auth-modal').classList.add('hidden');
-                    document.getElementById('app').classList.remove('hidden');
-                    document.getElementById('logged-in-user-label').innerText = email;
-                    fetchData();
-                } else {
-                    alert(data.message || 'Authentication failed.');
-                }
-            } catch(e) {
-                alert('Server connection error.');
-            }
-        }
-
-        function handleLogout() {
-            localStorage.removeItem('nexlink_user');
-            location.reload();
         }
 
         async function fetchData() {
