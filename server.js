@@ -59,11 +59,15 @@ app.post('/api/create-link', (req, res) => {
 // 2. API: Fetch all links and analytics for the 12 modules
 app.get('/api/get-data', (req, res) => {
     const linksDB = loadDB();
+    const hostProtocol = req.headers['x-forwarded-proto'] || 'https';
+    const host = req.headers['host'];
+
     const links = Object.keys(linksDB).map(slug => ({
         id: slug,
         title: slug.toUpperCase(),
         slug: slug,
-        domain: `https://${req.headers['host']}`,
+        shortUrl: `${hostProtocol}://${host}/${slug}`,
+        domain: `${hostProtocol}://${host}`,
         target: linksDB[slug].targetUrl,
         safePage: linksDB[slug].safeUrl,
         cloak: true,
@@ -77,7 +81,7 @@ app.get('/api/get-data', (req, res) => {
     res.json({ links });
 });
 
-// 3. Core Cloaking & Real-Time Analytics Tracking Engine
+// 3. CORE REDIRECTION ROUTER (Must be placed BEFORE the dashboard HTML route)
 app.get('/:slug', (req, res, next) => {
     const slug = req.params.slug;
     if (slug === 'favicon.ico' || slug === 'api') return next();
@@ -86,7 +90,12 @@ app.get('/:slug', (req, res, next) => {
     const linkData = linksDB[slug];
     
     if (!linkData) {
-        return res.status(404).send('Link not found or expired.');
+        return res.status(404).send(`
+            <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;">
+                <h2>Link Not Found or Expired</h2>
+                <p style="color: #94a3b8;">The requested short link does not exist on this server.</p>
+            </div>
+        `);
     }
 
     const userAgent = req.headers['user-agent'] || '';
@@ -95,10 +104,12 @@ app.get('/:slug', (req, res, next) => {
     if (isBot) {
         linkData.botHits++;
         saveDB(linksDB);
+        console.log(`[BOT BLOCKED] Cloak Shield redirected crawler for slug: /${slug}`);
         return res.redirect(302, linkData.safeUrl);
     } else {
         linkData.clicks++;
         saveDB(linksDB);
+        console.log(`[HUMAN PASSED] Redirected audience to target for slug: /${slug}`);
         return res.redirect(302, linkData.targetUrl);
     }
 });
