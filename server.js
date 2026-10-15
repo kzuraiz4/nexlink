@@ -32,18 +32,33 @@ function saveDB(db) {
     }
 }
 
-// 1. API: Create and save a new link permanently
+// 1. API: Create and save link permanently with new metadata fields
 app.post('/api/create-link', (req, res) => {
-    const { targetUrl, safeUrl, customSlug, campaign, label } = req.body;
+    const { 
+        targetUrl, 
+        safeUrl, 
+        customSlug, 
+        domainPrefix, 
+        title, 
+        previewTitle, 
+        previewDescription, 
+        previewImage, 
+        campaign 
+    } = req.body;
+
     const slug = customSlug ? customSlug.trim() : Math.random().toString(36).substring(2, 7);
     
     const linksDB = loadDB();
     
     linksDB[slug] = { 
+        title: title || slug.toUpperCase(),
         targetUrl: targetUrl, 
         safeUrl: safeUrl || targetUrl, 
+        domainPrefix: domainPrefix || '',
+        previewTitle: previewTitle || '',
+        previewDescription: previewDescription || '',
+        previewImage: previewImage || '',
         campaign: campaign || 'Q3 FB Ads Campaign',
-        label: label || 'E-Commerce',
         clicks: 0, 
         botHits: 0,
         createdAt: new Date().toISOString()
@@ -53,7 +68,9 @@ app.post('/api/create-link', (req, res) => {
     
     const hostProtocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.headers['host'];
-    res.json({ shortUrl: `${hostProtocol}://${host}/${slug}`, slug });
+    const chosenDomain = domainPrefix ? domainPrefix : `${hostProtocol}://${host}`;
+    
+    res.json({ shortUrl: `${chosenDomain}/${slug}`, slug });
 });
 
 // 2. API: Fetch all links and analytics for the 12 modules
@@ -62,26 +79,33 @@ app.get('/api/get-data', (req, res) => {
     const hostProtocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.headers['host'];
 
-    const links = Object.keys(linksDB).map(slug => ({
-        id: slug,
-        title: slug.toUpperCase(),
-        slug: slug,
-        shortUrl: `${hostProtocol}://${host}/${slug}`,
-        domain: `${hostProtocol}://${host}`,
-        target: linksDB[slug].targetUrl,
-        safePage: linksDB[slug].safeUrl,
-        cloak: true,
-        clicks: linksDB[slug].clicks,
-        botShielded: linksDB[slug].botHits,
-        campaign: linksDB[slug].campaign,
-        label: linksDB[slug].label,
-        created: linksDB[slug].createdAt.split('T')[0]
-    }));
+    const links = Object.keys(linksDB).map(slug => {
+        const item = linksDB[slug];
+        const chosenDomain = item.domainPrefix ? item.domainPrefix : `${hostProtocol}://${host}`;
+        
+        return {
+            id: slug,
+            title: item.title || slug.toUpperCase(),
+            slug: slug,
+            shortUrl: `${chosenDomain}/${slug}`,
+            domain: chosenDomain,
+            target: item.targetUrl,
+            safePage: item.safeUrl,
+            previewTitle: item.previewTitle,
+            previewDescription: item.previewDescription,
+            previewImage: item.previewImage,
+            cloak: true,
+            clicks: item.clicks || 0,
+            botShielded: item.botHits || 0,
+            campaign: item.campaign || 'Q3 FB Ads Campaign',
+            created: item.createdAt ? item.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]
+        };
+    });
 
     res.json({ links });
 });
 
-// 3. CORE REDIRECTION ROUTER (Must be placed BEFORE the dashboard HTML route)
+// 3. CORE REDIRECTION & SOCIAL CRAWLER ROUTER (Generates Dynamic Link Preview Cards)
 app.get('/:slug', (req, res, next) => {
     const slug = req.params.slug;
     if (slug === 'favicon.ico' || slug === 'api') return next();
@@ -99,11 +123,35 @@ app.get('/:slug', (req, res, next) => {
     }
 
     const userAgent = req.headers['user-agent'] || '';
-    const isBot = /facebookexternalhit|Facebot|WhatsApp|TelegramBot|Twitterbot|Googlebot|bingbot/i.test(userAgent);
+    const isBot = /facebookexternalhit|Facebot|WhatsApp|TelegramBot|Twitterbot|Googlebot|bingbot|Slackbot/i.test(userAgent);
 
     if (isBot) {
         linkData.botHits++;
         saveDB(linksDB);
+
+        // If custom preview meta tags exist, return HTML preview tags to social crawlers
+        if (linkData.previewTitle || linkData.previewImage || linkData.previewDescription) {
+            return res.send(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>${linkData.previewTitle || 'Link Preview'}</title>
+                    <meta property="og:title" content="${linkData.previewTitle || ''}" />
+                    <meta property="og:description" content="${linkData.previewDescription || ''}" />
+                    <meta property="og:image" content="${linkData.previewImage || ''}" />
+                    <meta property="og:type" content="website" />
+                    <meta name="twitter:card" content="summary_large_image" />
+                    <meta name="twitter:title" content="${linkData.previewTitle || ''}" />
+                    <meta name="twitter:description" content="${linkData.previewDescription || ''}" />
+                    <meta name="twitter:image" content="${linkData.previewImage || ''}" />
+                    <script>window.location.href = "${linkData.safeUrl}";</script>
+                </head>
+                <body></body>
+                </html>
+            `);
+        }
+
         console.log(`[BOT BLOCKED] Cloak Shield redirected crawler for slug: /${slug}`);
         return res.redirect(302, linkData.safeUrl);
     } else {
@@ -114,7 +162,7 @@ app.get('/:slug', (req, res, next) => {
     }
 });
 
-// 4. Serve the Complete 12-Module Dashboard Interface
+// 4. Serve the 12-Module Dashboard Interface
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -210,45 +258,84 @@ app.get('/', (req, res) => {
             </header>
 
             <main class="flex-1 overflow-y-auto custom-scrollbar p-6" id="main-content-view">
-                <!-- Tab views load dynamically -->
+                <!-- Dynamic Content -->
             </main>
         </div>
     </div>
 
-    <!-- CREATE LINK MODAL -->
-    <div id="create-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 space-y-4">
+    <!-- ENHANCED CREATE LINK MODAL MATCHING SCREENSHOT UI -->
+    <div id="create-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm hidden overflow-y-auto py-10">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 space-y-5 my-auto shadow-2xl">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h3 class="text-lg font-bold text-white"><i class="fa-solid fa-link text-indigo-400 mr-2"></i>Create Permanent Cloaked Link</h3>
+                <div>
+                    <h3 class="text-lg font-bold text-white">New link</h3>
+                    <p class="text-xs text-slate-400">Set everything up front — nothing here needs a second pass.</p>
+                </div>
                 <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
             </div>
 
-            <div class="space-y-3 text-xs">
+            <div class="space-y-4 text-xs">
                 <div>
-                    <label class="block font-semibold text-slate-300 uppercase mb-1">Target URL (Real Audience Destination)</label>
-                    <input type="url" id="modal-target-url" placeholder="https://your-landing-page.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500">
+                    <label class="block font-semibold text-slate-200 uppercase mb-1">Destination</label>
+                    <input type="url" id="modal-target-url" placeholder="https://example.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                    <p class="text-[11px] text-slate-500 mt-1">Where visitors go by default — and where anyone not matched by a country rule below ends up.</p>
                 </div>
-                <div>
-                    <label class="block font-semibold text-slate-300 uppercase mb-1">Safe Page URL (Presented to Facebook Crawlers)</label>
-                    <input type="url" id="modal-safe-url" value="https://news.cleanblogsite.org/privacy-article" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500">
+
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="col-span-1">
+                        <label class="block font-semibold text-slate-200 uppercase mb-1">Short link <span class="text-slate-500 font-normal">(optional)</span></label>
+                        <select id="modal-domain-prefix" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white">
+                            <option value="">shortivo.blog</option>
+                            <option value="https://go.securehub.app">securehub.app</option>
+                            <option value="https://trk.dealstream.co">dealstream.co</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block font-semibold text-slate-200 uppercase mb-1">&nbsp;</label>
+                        <input type="text" id="modal-slug" placeholder="my-campaign" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                    </div>
                 </div>
+                <p class="text-[11px] text-slate-500">A domain is picked at random each time, so links spread across all of them — change it if you want. Leave the ending blank for a generated one.</p>
+
                 <div>
-                    <label class="block font-semibold text-slate-300 uppercase mb-1">Custom Slug / Alias (Optional)</label>
-                    <input type="text" id="modal-slug" placeholder="e.g. promo-2026" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500">
+                    <label class="block font-semibold text-slate-200 uppercase mb-1">Title <span class="text-slate-500 font-normal">(optional)</span></label>
+                    <input type="text" id="modal-title" placeholder="Internal label" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                 </div>
+
                 <div>
-                    <label class="block font-semibold text-slate-300 uppercase mb-1">Campaign</label>
-                    <select id="modal-campaign" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white">
-                        <option value="Q3 FB Ads Campaign">Q3 FB Ads Campaign</option>
-                        <option value="TikTok Viral Funnel">TikTok Viral Funnel</option>
-                        <option value="Affiliate Launch 2026">Affiliate Launch 2026</option>
-                    </select>
+                    <label class="block font-semibold text-slate-200 uppercase mb-1">Safe Page URL <span class="text-slate-500 font-normal">(FB Bot Target)</span></label>
+                    <input type="url" id="modal-safe-url" value="https://news.cleanblogsite.org/privacy-article" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                </div>
+
+                <!-- LINK PREVIEW SECTION FROM SCREENSHOT -->
+                <div class="border border-slate-800 bg-slate-950/60 rounded-xl p-4 space-y-3">
+                    <div class="flex items-center space-x-2 text-indigo-400 font-semibold text-xs">
+                        <i class="fa-regular fa-image"></i>
+                        <span>Link preview</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400">What people see when this link is shared on WhatsApp, Slack, X and similar. Leave blank to show whatever the destination provides.</p>
+                    
+                    <input type="text" id="modal-preview-title" placeholder="Preview title" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
+                    <input type="text" id="modal-preview-desc" placeholder="Preview description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
+
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-2">Preview image</label>
+                        <div class="flex items-center space-x-3">
+                            <button type="button" onclick="selectPreviewImg('')" id="img-opt-none" class="w-24 h-20 bg-slate-900 border-2 border-indigo-500 rounded-xl flex items-center justify-center text-indigo-400 font-semibold">
+                                None
+                            </button>
+                            <button type="button" onclick="selectPreviewImg('https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500')" id="img-opt-1" class="w-24 h-20 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden relative">
+                                <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500" class="w-full h-full object-cover">
+                            </button>
+                        </div>
+                        <input type="hidden" id="modal-preview-image" value="">
+                    </div>
                 </div>
             </div>
 
             <div class="flex justify-end space-x-3 pt-3 border-t border-slate-800">
                 <button onclick="closeCreateModal()" class="px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
-                <button onclick="handleSaveNewLink()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium shadow">Save & Generate</button>
+                <button onclick="handleSaveNewLink()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium shadow">Generate Link</button>
             </div>
         </div>
     </div>
@@ -330,7 +417,8 @@ app.get('/', (req, res) => {
                                 \${state.links.map(l => \`
                                     <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                                         <div>
-                                            <a href="\${l.shortUrl}" target="_blank" class="font-bold text-indigo-400 font-mono text-sm underline">\${l.shortUrl}</a>
+                                            <p class="font-bold text-white text-sm mb-1">\${l.title}</p>
+                                            <a href="\${l.shortUrl}" target="_blank" class="font-bold text-indigo-400 font-mono text-xs underline">\${l.shortUrl}</a>
                                             <p class="text-slate-400 mt-1"><i class="fa-solid fa-bullseye text-indigo-400 mr-1"></i>Target: \${l.target}</p>
                                             <p class="text-slate-500"><i class="fa-solid fa-shield-cat text-emerald-400 mr-1"></i>Safe Page: \${l.safePage}</p>
                                         </div>
@@ -340,25 +428,6 @@ app.get('/', (req, res) => {
                                         </div>
                                     </div>
                                 \`).join('')}
-                            </div>
-                        </div>
-                    </div>
-                \`;
-            } else if (tab === 'analytics') {
-                container.innerHTML = \`
-                    <div class="space-y-6">
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Tracked Impressions</span>
-                                <h3 class="text-xl font-bold text-white mt-1">\${totalClicks + totalBots}</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Human Conversion Rate</span>
-                                <h3 class="text-xl font-bold text-emerald-400 mt-1">100% Safe Route</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Top Traffic Source</span>
-                                <h3 class="text-xl font-bold text-indigo-400 mt-1">Facebook & Instagram Ads</h3>
                             </div>
                         </div>
                     </div>
@@ -374,26 +443,50 @@ app.get('/', (req, res) => {
             }
         }
 
+        function selectPreviewImg(url) {
+            document.getElementById('modal-preview-image').value = url;
+            if(!url) {
+                document.getElementById('img-opt-none').className = 'w-24 h-20 bg-slate-900 border-2 border-indigo-500 rounded-xl flex items-center justify-center text-indigo-400 font-semibold';
+                document.getElementById('img-opt-1').className = 'w-24 h-20 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden relative';
+            } else {
+                document.getElementById('img-opt-none').className = 'w-24 h-20 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-slate-500';
+                document.getElementById('img-opt-1').className = 'w-24 h-20 bg-slate-900 border-2 border-indigo-500 rounded-xl overflow-hidden relative';
+            }
+        }
+
         async function handleSaveNewLink() {
             const targetUrl = document.getElementById('modal-target-url').value;
             const safeUrl = document.getElementById('modal-safe-url').value;
             const customSlug = document.getElementById('modal-slug').value;
-            const campaign = document.getElementById('modal-campaign').value;
+            const domainPrefix = document.getElementById('modal-domain-prefix').value;
+            const title = document.getElementById('modal-title').value;
+            const previewTitle = document.getElementById('modal-preview-title').value;
+            const previewDescription = document.getElementById('modal-preview-desc').value;
+            const previewImage = document.getElementById('modal-preview-image').value;
 
-            if(!targetUrl) { alert('Please enter a target URL'); return; }
+            if(!targetUrl) { alert('Please enter a destination URL'); return; }
 
             try {
                 const res = await fetch('/api/create-link', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ targetUrl, safeUrl, customSlug, campaign })
+                    body: JSON.stringify({ 
+                        targetUrl, 
+                        safeUrl, 
+                        customSlug, 
+                        domainPrefix, 
+                        title, 
+                        previewTitle, 
+                        previewDescription, 
+                        previewImage 
+                    })
                 });
 
                 const data = await res.json();
                 if(res.ok) {
                     closeCreateModal();
                     await fetchData();
-                    alert("Success! Permanent link generated:\\n" + data.shortUrl);
+                    alert("Success! Working short link generated:\n" + data.shortUrl);
                 } else {
                     alert("Failed to create link.");
                 }
@@ -410,4 +503,4 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running with permanent storage on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
