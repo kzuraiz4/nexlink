@@ -8,7 +8,7 @@ app.use(express.json());
 app.use(cors());
 
 // Permanent local database file path
-const DB_FILE = path.join(__dirname, 'links.json');
+const DB_FILE = path.join(__dirname, 'db.json');
 
 // Load database securely
 function loadDB() {
@@ -20,7 +20,10 @@ function loadDB() {
     } catch (e) {
         console.error("Error reading database file:", e);
     }
-    return {};
+    return {
+        users: [{ email: "admin@nexlink.io", password: "password123" }],
+        links: {}
+    };
 }
 
 // Save database permanently
@@ -32,7 +35,35 @@ function saveDB(db) {
     }
 }
 
-// 1. API: Create and save link permanently with new metadata fields
+// --- AUTH API ENDPOINTS ---
+app.post('/api/signup', (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
+
+    const db = loadDB();
+    const existingUser = db.users.find(u => u.email === email);
+    if (existingUser) {
+        return res.status(400).json({ message: 'User already exists with this email.' });
+    }
+
+    db.users.push({ email, password });
+    saveDB(db);
+    res.json({ success: true, email });
+});
+
+app.post('/api/login', (req, res) => {
+    const { email, password } = req.body;
+    const db = loadDB();
+    const user = db.users.find(u => u.email === email && u.password === password);
+    
+    if (user) {
+        res.json({ success: true, email: user.email });
+    } else {
+        res.status(401).json({ message: 'Invalid email or password.' });
+    }
+});
+
+// --- LINK CREATION & DATA API ---
 app.post('/api/create-link', (req, res) => {
     const { 
         targetUrl, 
@@ -47,10 +78,10 @@ app.post('/api/create-link', (req, res) => {
     } = req.body;
 
     const slug = customSlug ? customSlug.trim() : Math.random().toString(36).substring(2, 7);
+    const db = loadDB();
+    if (!db.links) db.links = {};
     
-    const linksDB = loadDB();
-    
-    linksDB[slug] = { 
+    db.links[slug] = { 
         title: title || slug.toUpperCase(),
         targetUrl: targetUrl, 
         safeUrl: safeUrl || targetUrl, 
@@ -64,7 +95,7 @@ app.post('/api/create-link', (req, res) => {
         createdAt: new Date().toISOString()
     };
     
-    saveDB(linksDB);
+    saveDB(db);
     
     const hostProtocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.headers['host'];
@@ -73,14 +104,13 @@ app.post('/api/create-link', (req, res) => {
     res.json({ shortUrl: `${chosenDomain}/${slug}`, slug });
 });
 
-// 2. API: Fetch all links and analytics for the 12 modules
 app.get('/api/get-data', (req, res) => {
-    const linksDB = loadDB();
+    const db = loadDB();
     const hostProtocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.headers['host'];
 
-    const links = Object.keys(linksDB).map(slug => {
-        const item = linksDB[slug];
+    const links = Object.keys(db.links || {}).map(slug => {
+        const item = db.links[slug];
         const chosenDomain = item.domainPrefix ? item.domainPrefix : `${hostProtocol}://${host}`;
         
         return {
@@ -105,13 +135,13 @@ app.get('/api/get-data', (req, res) => {
     res.json({ links });
 });
 
-// 3. CORE REDIRECTION & SOCIAL CRAWLER ROUTER
+// --- CORE REDIRECTION ROUTER (Placed before dashboard loader) ---
 app.get('/:slug', (req, res, next) => {
     const slug = req.params.slug;
     if (slug === 'favicon.ico' || slug === 'api') return next();
 
-    const linksDB = loadDB();
-    const linkData = linksDB[slug];
+    const db = loadDB();
+    const linkData = db.links ? db.links[slug] : null;
     
     if (!linkData) {
         return res.status(404).send(`
@@ -127,7 +157,7 @@ app.get('/:slug', (req, res, next) => {
 
     if (isBot) {
         linkData.botHits++;
-        saveDB(linksDB);
+        saveDB(db);
 
         if (linkData.previewTitle || linkData.previewImage || linkData.previewDescription) {
             return res.send(`
@@ -153,12 +183,12 @@ app.get('/:slug', (req, res, next) => {
         return res.redirect(302, linkData.safeUrl);
     } else {
         linkData.clicks++;
-        saveDB(linksDB);
+        saveDB(db);
         return res.redirect(302, linkData.targetUrl);
     }
 });
 
-// 4. Serve the Complete 12-Module Dashboard Interface
+// --- FULL DASHBOARD UI ---
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -190,9 +220,44 @@ app.get('/', (req, res) => {
 </head>
 <body class="bg-slate-900 text-slate-100 dark:bg-slate-950 min-h-screen flex flex-col">
 
-    <div id="app" class="flex h-screen overflow-hidden">
+    <!-- LOGIN / SIGNUP MODAL -->
+    <div id="auth-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 backdrop-blur-md">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-8 space-y-6 shadow-2xl">
+            <div class="text-center space-y-2">
+                <div class="inline-block bg-gradient-to-tr from-indigo-600 to-purple-600 p-3 rounded-2xl text-white shadow-lg mb-2">
+                    <i class="fa-solid fa-link text-2xl"></i>
+                </div>
+                <h2 class="text-xl font-bold text-white" id="auth-title">Welcome to NexLink.io</h2>
+                <p class="text-xs text-slate-400">Enterprise URL Shortener & Meta Cloaking System</p>
+            </div>
+
+            <div class="space-y-4 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-300 uppercase mb-1">Email Address</label>
+                    <input type="email" id="auth-email" placeholder="admin@nexlink.io" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-300 uppercase mb-1">Password</label>
+                    <input type="password" id="auth-password" placeholder="••••••••" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
+                </div>
+
+                <button onclick="handleAuthSubmit()" id="auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-lg shadow-md transition">
+                    Sign In to Dashboard
+                </button>
+
+                <div class="text-center pt-2">
+                    <button onclick="toggleAuthMode()" class="text-indigo-400 hover:underline text-xs" id="auth-toggle-text">
+                        Need an account? Sign up
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN DASHBOARD SYSTEM -->
+    <div id="app" class="flex h-screen overflow-hidden hidden">
         
-        <!-- SIDEBAR - ALL 12 MODULES -->
+        <!-- SIDEBAR WITH ALL 12 MODULES -->
         <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0 z-30">
             <div class="flex flex-col h-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800">
@@ -212,7 +277,7 @@ app.get('/', (req, res) => {
                         </span>
                         <div>
                             <p class="text-xs font-semibold text-emerald-400">Cloak Shield v4.2</p>
-                            <p class="text-[10px] text-slate-400">Permanent DB Active</p>
+                            <p class="text-[10px] text-slate-400 truncate max-w-[110px]" id="logged-in-user-label">Permanent DB Active</p>
                         </div>
                     </div>
                     <i class="fa-solid fa-user-ninja text-emerald-400 text-sm"></i>
@@ -237,6 +302,12 @@ app.get('/', (req, res) => {
                     <a href="#" onclick="switchTab('team')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-user-group w-6 text-center"></i><span class="ml-2">Team</span></a>
                     <a href="#" onclick="switchTab('settings')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-gear w-6 text-center"></i><span class="ml-2">Settings</span></a>
                 </nav>
+
+                <div class="p-3 border-t border-slate-800">
+                    <button onclick="handleLogout()" class="w-full bg-slate-800 hover:bg-rose-900/40 text-slate-300 hover:text-rose-400 text-xs py-2 rounded-lg transition">
+                        <i class="fa-solid fa-right-from-bracket mr-1"></i> Sign Out
+                    </button>
+                </div>
             </div>
         </aside>
 
@@ -259,7 +330,7 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- ENHANCED CREATE LINK MODAL -->
+    <!-- CREATE LINK MODAL WITH CUSTOM PICTURE INPUT -->
     <div id="create-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm hidden overflow-y-auto py-10">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 space-y-5 my-auto shadow-2xl">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -313,16 +384,9 @@ app.get('/', (req, res) => {
                     <input type="text" id="modal-preview-desc" placeholder="Preview description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
 
                     <div>
-                        <label class="block text-[11px] text-slate-400 mb-2">Preview image</label>
-                        <div class="flex items-center space-x-3">
-                            <button type="button" onclick="selectPreviewImg('')" id="img-opt-none" class="w-24 h-20 bg-slate-900 border-2 border-indigo-500 rounded-xl flex items-center justify-center text-indigo-400 font-semibold">
-                                None
-                            </button>
-                            <button type="button" onclick="selectPreviewImg('https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500')" id="img-opt-1" class="w-24 h-20 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden relative">
-                                <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500" class="w-full h-full object-cover">
-                            </button>
-                        </div>
-                        <input type="hidden" id="modal-preview-image" value="">
+                        <label class="block font-semibold text-slate-300 uppercase mb-1">Preview Image URL</label>
+                        <input type="url" id="modal-preview-image" placeholder="https://example.com/image.jpg" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
+                        <p class="text-[10px] text-slate-500 mt-1">Paste a direct image link to customize your social preview card.</p>
                     </div>
                 </div>
             </div>
@@ -335,14 +399,65 @@ app.get('/', (req, res) => {
     </div>
 
     <script>
+        let isSignupMode = false;
         const state = {
             activeTab: 'overview',
             links: []
         };
 
         window.onload = function() {
-            fetchData();
+            const currentUser = localStorage.getItem('nexlink_user');
+            if (currentUser) {
+                document.getElementById('auth-modal').classList.add('hidden');
+                document.getElementById('app').classList.remove('hidden');
+                document.getElementById('logged-in-user-label').innerText = currentUser;
+                fetchData();
+            }
         };
+
+        function toggleAuthMode() {
+            isSignupMode = !isSignupMode;
+            document.getElementById('auth-title').innerText = isSignupMode ? 'Create an Account' : 'Welcome to NexLink.io';
+            document.getElementById('auth-btn').innerText = isSignupMode ? 'Sign Up' : 'Sign In to Dashboard';
+            document.getElementById('auth-toggle-text').innerText = isSignupMode ? 'Already have an account? Sign in' : 'Need an account? Sign up';
+        }
+
+        async function handleAuthSubmit() {
+            const email = document.getElementById('auth-email').value.trim();
+            const password = document.getElementById('auth-password').value.trim();
+
+            if (!email || !password) {
+                alert('Please enter both email and password.');
+                return;
+            }
+
+            const endpoint = isSignupMode ? '/api/signup' : '/api/login';
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    localStorage.setItem('nexlink_user', email);
+                    document.getElementById('auth-modal').classList.add('hidden');
+                    document.getElementById('app').classList.remove('hidden');
+                    document.getElementById('logged-in-user-label').innerText = email;
+                    fetchData();
+                } else {
+                    alert(data.message || 'Authentication failed.');
+                }
+            } catch(e) {
+                alert('Server connection error.');
+            }
+        }
+
+        function handleLogout() {
+            localStorage.removeItem('nexlink_user');
+            location.reload();
+        }
 
         async function fetchData() {
             try {
@@ -424,6 +539,7 @@ app.get('/', (req, res) => {
                                             <a href="\${l.shortUrl}" target="_blank" class="font-bold text-indigo-400 font-mono text-xs underline">\${l.shortUrl}</a>
                                             <p class="text-slate-400 mt-1"><i class="fa-solid fa-bullseye text-indigo-400 mr-1"></i>Target: \${l.target}</p>
                                             <p class="text-slate-500"><i class="fa-solid fa-shield-cat text-emerald-400 mr-1"></i>Safe Page: \${l.safePage}</p>
+                                            \${l.previewTitle ? \`<p class="text-indigo-300 mt-1"><i class="fa-regular fa-image mr-1"></i>Card Title: \${l.previewTitle}</p>\` : ''}
                                         </div>
                                         <div class="flex items-center space-x-2">
                                             <span class="bg-slate-900 text-slate-300 px-2.5 py-1 rounded">Clicks: \${l.clicks} | Bots: \${l.botShielded}</span>
@@ -462,17 +578,6 @@ app.get('/', (req, res) => {
                         <p class="text-xs text-slate-400">Database connected and syncing permanently with your server storage.</p>
                     </div>
                 \`;
-            }
-        }
-
-        function selectPreviewImg(url) {
-            document.getElementById('modal-preview-image').value = url;
-            if(!url) {
-                document.getElementById('img-opt-none').className = 'w-24 h-20 bg-slate-900 border-2 border-indigo-500 rounded-xl flex items-center justify-center text-indigo-400 font-semibold';
-                document.getElementById('img-opt-1').className = 'w-24 h-20 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden relative';
-            } else {
-                document.getElementById('img-opt-none').className = 'w-24 h-20 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-slate-500';
-                document.getElementById('img-opt-1').className = 'w-24 h-20 bg-slate-900 border-2 border-indigo-500 rounded-xl overflow-hidden relative';
             }
         }
 
