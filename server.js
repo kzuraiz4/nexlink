@@ -4,30 +4,36 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-// Increased JSON body limit to 10MB to support uploaded preview image files
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-// Permanent local database file path
 const DB_FILE = path.join(__dirname, 'db.json');
 
-// Load database securely
+// Ensure db.json exists on disk with default admin user
 function loadDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
             const data = fs.readFileSync(DB_FILE, 'utf8');
-            return JSON.parse(data);
+            if (data.trim().length > 0) {
+                const parsed = JSON.parse(data);
+                if (!parsed.users) parsed.users = [];
+                if (!parsed.links) parsed.links = {};
+                return parsed;
+            }
         }
     } catch (e) {
         console.error("Error reading database file:", e);
     }
-    return {
+
+    // Default structure saved immediately to disk
+    const defaultDB = {
         users: [{ email: "admin@nexlink.io", password: "password123" }],
         links: {}
     };
+    saveDB(defaultDB);
+    return defaultDB;
 }
 
-// Save database permanently
 function saveDB(db) {
     try {
         fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
@@ -36,26 +42,31 @@ function saveDB(db) {
     }
 }
 
+// Initialize database on startup
+loadDB();
+
 // --- AUTH API ENDPOINTS ---
 app.post('/api/signup', (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
 
     const db = loadDB();
-    const existingUser = db.users.find(u => u.email === email);
+    const existingUser = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (existingUser) {
         return res.status(400).json({ message: 'User already exists with this email.' });
     }
 
-    db.users.push({ email, password });
+    db.users.push({ email: email.toLowerCase(), password });
     saveDB(db);
-    res.json({ success: true, email });
+    res.json({ success: true, email: email.toLowerCase() });
 });
 
 app.post('/api/login', (req, res) => {
     const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
+
     const db = loadDB();
-    const user = db.users.find(u => u.email === email && u.password === password);
+    const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
     
     if (user) {
         res.json({ success: true, email: user.email });
@@ -67,15 +78,8 @@ app.post('/api/login', (req, res) => {
 // --- LINK CREATION & DATA API ---
 app.post('/api/create-link', (req, res) => {
     const { 
-        targetUrl, 
-        safeUrl, 
-        customSlug, 
-        domainPrefix, 
-        title, 
-        previewTitle, 
-        previewDescription, 
-        previewImage, 
-        campaign 
+        targetUrl, safeUrl, customSlug, domainPrefix, 
+        title, previewTitle, previewDescription, previewImage, campaign 
     } = req.body;
 
     const slug = customSlug ? customSlug.trim() : Math.random().toString(36).substring(2, 7);
@@ -136,7 +140,7 @@ app.get('/api/get-data', (req, res) => {
     res.json({ links });
 });
 
-// --- CORE REDIRECTION ROUTER (Generates Dynamic Social Meta Cards) ---
+// --- CORE REDIRECTION ROUTER ---
 app.get('/:slug', (req, res, next) => {
     const slug = req.params.slug;
     if (slug === 'favicon.ico' || slug === 'api') return next();
@@ -189,7 +193,7 @@ app.get('/:slug', (req, res, next) => {
     }
 });
 
-// --- FULL DASHBOARD UI ---
+// --- DASHBOARD UI ---
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -255,10 +259,8 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- MAIN DASHBOARD SYSTEM -->
+    <!-- MAIN DASHBOARD -->
     <div id="app" class="flex h-screen overflow-hidden hidden">
-        
-        <!-- SIDEBAR WITH ALL 12 MODULES -->
         <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0 z-30">
             <div class="flex flex-col h-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800">
@@ -312,7 +314,6 @@ app.get('/', (req, res) => {
             </div>
         </aside>
 
-        <!-- MAIN VIEWPORT -->
         <div class="flex-1 flex flex-col overflow-hidden bg-slate-950">
             <header class="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-6 flex items-center justify-between z-20">
                 <h1 id="current-page-title" class="text-lg font-bold text-white flex items-center gap-2">
@@ -331,7 +332,7 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- CREATE LINK MODAL WITH FILE UPLOAD PREVIEW -->
+    <!-- CREATE LINK MODAL -->
     <div id="create-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm hidden overflow-y-auto py-10">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 space-y-5 my-auto shadow-2xl">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -346,7 +347,7 @@ app.get('/', (req, res) => {
                 <div>
                     <label class="block font-semibold text-slate-200 uppercase mb-1">Destination</label>
                     <input type="url" id="modal-target-url" placeholder="https://example.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
-                    <p class="text-[11px] text-slate-500 mt-1">Where visitors go by default — and where anyone not matched by a country rule below ends up.</p>
+                    <p class="text-[11px] text-slate-500 mt-1">Where visitors go by default.</p>
                 </div>
 
                 <div class="grid grid-cols-3 gap-2">
@@ -384,21 +385,18 @@ app.get('/', (req, res) => {
                     <input type="text" id="modal-preview-title" placeholder="Preview title" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
                     <input type="text" id="modal-preview-desc" placeholder="Preview description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
 
-                    <!-- PREVIEW IMAGE FILE UPLOAD + URL INPUT -->
                     <div class="space-y-2">
                         <label class="block font-semibold text-slate-300 uppercase">Preview Image Card</label>
-                        
                         <div class="flex items-center space-x-3">
                             <label class="flex-1 cursor-pointer bg-slate-900 border border-dashed border-indigo-500/50 hover:border-indigo-500 rounded-lg p-3 text-center transition">
                                 <i class="fa-solid fa-cloud-arrow-up text-indigo-400 text-lg mb-1 block"></i>
                                 <span class="text-xs text-slate-300 font-medium block">Upload Image File</span>
-                                <span class="text-[10px] text-slate-500 block">PNG, JPG, WEBP (Max 5MB)</span>
                                 <input type="file" id="modal-preview-file" accept="image/*" onchange="handleFileSelect(event)" class="hidden">
                             </label>
 
                             <div class="w-24 h-20 bg-slate-900 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center relative shrink-0">
                                 <img id="preview-img-tag" src="" class="w-full h-full object-cover hidden">
-                                <span id="preview-img-placeholder" class="text-[10px] text-slate-600 text-center px-1">No Image Selected</span>
+                                <span id="preview-img-placeholder" class="text-[10px] text-slate-600 text-center px-1">No Image</span>
                             </div>
                         </div>
 
@@ -656,14 +654,8 @@ app.get('/', (req, res) => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        targetUrl, 
-                        safeUrl, 
-                        customSlug, 
-                        domainPrefix, 
-                        title, 
-                        previewTitle, 
-                        previewDescription, 
-                        previewImage 
+                        targetUrl, safeUrl, customSlug, domainPrefix, 
+                        title, previewTitle, previewDescription, previewImage 
                     })
                 });
 
