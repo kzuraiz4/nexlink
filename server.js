@@ -7,23 +7,21 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-// Use absolute path for reliability on cloud servers
-const DB_FILE = path.resolve(__dirname, 'db.json');
+const DB_FILE = path.join(__dirname, 'db.json');
 
 function loadDB() {
     try {
         if (fs.existsSync(DB_FILE)) {
             const data = fs.readFileSync(DB_FILE, 'utf8');
-            if (data && data.trim().length > 0) {
+            if (data.trim().length > 0) {
                 const parsed = JSON.parse(data);
                 if (!parsed.links) parsed.links = {};
                 return parsed;
             }
         }
     } catch (e) {
-        console.error("Error reading database file:", e);
+        console.error("Error reading db.json:", e);
     }
-
     const defaultDB = { links: {} };
     saveDB(defaultDB);
     return defaultDB;
@@ -33,14 +31,14 @@ function saveDB(db) {
     try {
         fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
     } catch (e) {
-        console.error("Error saving database file:", e);
+        console.error("Error writing db.json:", e);
     }
 }
 
-// Initialize database on startup
+// Initializing DB file on startup
 loadDB();
 
-// --- API ENDPOINTS ---
+// --- 1. API: CREATE SHORT LINK ---
 app.post('/api/create-link', (req, res) => {
     try {
         const { 
@@ -52,9 +50,8 @@ app.post('/api/create-link', (req, res) => {
             return res.status(400).json({ error: 'Target URL is required' });
         }
 
-        const slug = customSlug ? customSlug.trim() : Math.random().toString(36).substring(2, 7);
+        const slug = customSlug && customSlug.trim() !== '' ? customSlug.trim() : Math.random().toString(36).substring(2, 7);
         const db = loadDB();
-        if (!db.links) db.links = {};
         
         db.links[slug] = { 
             title: title || slug.toUpperCase(),
@@ -78,11 +75,12 @@ app.post('/api/create-link', (req, res) => {
         
         res.json({ shortUrl: `${chosenDomain}/${slug}`, slug });
     } catch (err) {
-        console.error("Error creating link:", err);
-        res.status(500).json({ error: 'Server error creating link' });
+        console.error("Error generating link:", err);
+        res.status(500).json({ error: 'Server error generating short link' });
     }
 });
 
+// --- 2. API: GET DASHBOARD DATA ---
 app.get('/api/get-data', (req, res) => {
     try {
         const db = loadDB();
@@ -104,7 +102,6 @@ app.get('/api/get-data', (req, res) => {
                 previewTitle: item.previewTitle,
                 previewDescription: item.previewDescription,
                 previewImage: item.previewImage,
-                cloak: true,
                 clicks: item.clicks || 0,
                 botShielded: item.botHits || 0,
                 campaign: item.campaign || 'Q3 FB Ads Campaign',
@@ -115,11 +112,11 @@ app.get('/api/get-data', (req, res) => {
         res.json({ links });
     } catch (err) {
         console.error("Error fetching data:", err);
-        res.status(500).json({ error: 'Server error fetching data' });
+        res.status(500).json({ error: 'Server error fetching records' });
     }
 });
 
-// --- CORE REDIRECTION ROUTER ---
+// --- 3. CORE BOT-SHIELDING & REDIRECTION ROUTER ---
 app.get('/:slug', (req, res, next) => {
     const slug = req.params.slug;
     if (slug === 'favicon.ico' || slug === 'api') return next();
@@ -140,9 +137,10 @@ app.get('/:slug', (req, res, next) => {
     const isBot = /facebookexternalhit|Facebot|WhatsApp|TelegramBot|Twitterbot|Googlebot|bingbot|Slackbot/i.test(userAgent);
 
     if (isBot) {
-        linkData.botHits++;
+        linkData.botHits = (linkData.botHits || 0) + 1;
         saveDB(db);
 
+        // Serve Meta tags for card preview when scraped by social networks
         if (linkData.previewTitle || linkData.previewImage || linkData.previewDescription) {
             return res.send(`
                 <!DOCTYPE html>
@@ -166,13 +164,13 @@ app.get('/:slug', (req, res, next) => {
         }
         return res.redirect(302, linkData.safeUrl);
     } else {
-        linkData.clicks++;
+        linkData.clicks = (linkData.clicks || 0) + 1;
         saveDB(db);
         return res.redirect(302, linkData.targetUrl);
     }
 });
 
-// --- DASHBOARD UI ---
+// --- 4. DASHBOARD FRONTEND INTERFACE ---
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -205,6 +203,7 @@ app.get('/', (req, res) => {
 <body class="bg-slate-900 text-slate-100 dark:bg-slate-950 min-h-screen flex flex-col">
 
     <div id="app" class="flex h-screen overflow-hidden">
+        <!-- SIDEBAR MENU -->
         <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0 z-30">
             <div class="flex flex-col h-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800">
@@ -232,7 +231,7 @@ app.get('/', (req, res) => {
 
                 <nav class="flex-1 px-3 py-2 space-y-1 overflow-y-auto custom-scrollbar text-sm">
                     <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-3 my-2">Main Menu</div>
-                    <a href="#" onclick="switchTab('overview')" class="nav-item active flex items-center px-3 py-2.5 font-medium rounded-lg text-white bg-indigo-600/90"><i class="fa-solid fa-chart-pie w-6 text-center"></i><span class="ml-2">Overview</span></a>
+                    <a href="#" onclick="switchTab('overview')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-white bg-indigo-600/90"><i class="fa-solid fa-chart-pie w-6 text-center"></i><span class="ml-2">Overview</span></a>
                     <a href="#" onclick="switchTab('links')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-link w-6 text-center"></i><span class="ml-2">Links</span><span class="ml-auto bg-indigo-500/20 text-indigo-300 text-xs px-2 py-0.5 rounded-full font-semibold" id="link-count-badge">0</span></a>
                     <a href="#" onclick="switchTab('analytics')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-chart-line w-6 text-center"></i><span class="ml-2">Analytics</span></a>
                     <a href="#" onclick="switchTab('campaigns')" class="nav-item flex items-center px-3 py-2.5 font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"><i class="fa-solid fa-bullhorn w-6 text-center"></i><span class="ml-2">Campaigns</span></a>
@@ -252,6 +251,7 @@ app.get('/', (req, res) => {
             </div>
         </aside>
 
+        <!-- MAIN DASHBOARD CONTENT -->
         <div class="flex-1 flex flex-col overflow-hidden bg-slate-950">
             <header class="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-6 flex items-center justify-between z-20">
                 <h1 id="current-page-title" class="text-lg font-bold text-white flex items-center gap-2">
@@ -265,7 +265,7 @@ app.get('/', (req, res) => {
             </header>
 
             <main class="flex-1 overflow-y-auto custom-scrollbar p-6" id="main-content-view">
-                <!-- Dynamic Content -->
+                <!-- Content renders here dynamically -->
             </main>
         </div>
     </div>
@@ -283,13 +283,13 @@ app.get('/', (req, res) => {
 
             <div class="space-y-4 text-xs">
                 <div>
-                    <label class="block font-semibold text-slate-200 uppercase mb-1">Destination</label>
+                    <label class="block font-semibold text-slate-200 uppercase mb-1">Destination (Real Target URL)</label>
                     <input type="url" id="modal-target-url" placeholder="https://example.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                 </div>
 
                 <div class="grid grid-cols-3 gap-2">
                     <div class="col-span-1">
-                        <label class="block font-semibold text-slate-200 uppercase mb-1">Short link <span class="text-slate-500 font-normal">(optional)</span></label>
+                        <label class="block font-semibold text-slate-200 uppercase mb-1">Short Link Domain</label>
                         <select id="modal-domain-prefix" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white">
                             <option value="">Default Host</option>
                             <option value="https://go.securehub.app">securehub.app</option>
@@ -297,32 +297,32 @@ app.get('/', (req, res) => {
                         </select>
                     </div>
                     <div class="col-span-2">
-                        <label class="block font-semibold text-slate-200 uppercase mb-1">&nbsp;</label>
+                        <label class="block font-semibold text-slate-200 uppercase mb-1">Custom Alias / Slug</label>
                         <input type="text" id="modal-slug" placeholder="my-campaign" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                     </div>
                 </div>
 
                 <div>
-                    <label class="block font-semibold text-slate-200 uppercase mb-1">Title <span class="text-slate-500 font-normal">(optional)</span></label>
+                    <label class="block font-semibold text-slate-200 uppercase mb-1">Title (Optional)</label>
                     <input type="text" id="modal-title" placeholder="Internal label" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                 </div>
 
                 <div>
-                    <label class="block font-semibold text-slate-200 uppercase mb-1">Safe Page URL <span class="text-slate-500 font-normal">(FB Bot Target)</span></label>
+                    <label class="block font-semibold text-slate-200 uppercase mb-1">Safe Page URL (FB Bot Redirect Destination)</label>
                     <input type="url" id="modal-safe-url" value="https://news.cleanblogsite.org/privacy-article" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-indigo-500 focus:outline-none">
                 </div>
 
                 <div class="border border-slate-800 bg-slate-950/60 rounded-xl p-4 space-y-3">
                     <div class="flex items-center space-x-2 text-indigo-400 font-semibold text-xs">
                         <i class="fa-regular fa-image"></i>
-                        <span>Link preview</span>
+                        <span>Social Link Preview Settings</span>
                     </div>
                     
-                    <input type="text" id="modal-preview-title" placeholder="Preview title" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
-                    <input type="text" id="modal-preview-desc" placeholder="Preview description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
+                    <input type="text" id="modal-preview-title" placeholder="Preview Title (OG Tag)" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
+                    <input type="text" id="modal-preview-desc" placeholder="Preview Description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
 
                     <div class="space-y-2">
-                        <label class="block font-semibold text-slate-300 uppercase">Preview Image Card</label>
+                        <label class="block font-semibold text-slate-300 uppercase">Preview Image</label>
                         <div class="flex items-center space-x-3">
                             <label class="flex-1 cursor-pointer bg-slate-900 border border-dashed border-indigo-500/50 hover:border-indigo-500 rounded-lg p-3 text-center transition">
                                 <i class="fa-solid fa-cloud-arrow-up text-indigo-400 text-lg mb-1 block"></i>
@@ -406,7 +406,7 @@ app.get('/', (req, res) => {
                 document.getElementById('link-count-badge').innerText = state.links.length;
                 renderTabContent(state.activeTab);
             } catch(e) {
-                console.error("Failed to fetch database records");
+                console.error("Failed to fetch database records:", e);
             }
         }
 
@@ -419,7 +419,7 @@ app.get('/', (req, res) => {
 
             const currentNav = Array.from(document.querySelectorAll('.nav-item')).find(el => {
                 const attr = el.getAttribute('onclick');
-                return attr && attr.includes(\`'\${tabId}'\`);
+                return attr && attr.includes("'" + tabId + "'");
             });
             if (currentNav) {
                 currentNav.classList.add('bg-indigo-600/90', 'text-white');
@@ -443,82 +443,83 @@ app.get('/', (req, res) => {
             const totalBots = state.links.reduce((acc, l) => acc + (l.botShielded || 0), 0);
 
             if (tab === 'overview' || tab === 'links') {
-                container.innerHTML = \`
-                    <div class="space-y-6">
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Total Permanent Links</span>
-                                <h3 class="text-2xl font-bold text-white mt-1">\${state.links.length}</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Real Audience Clicks</span>
-                                <h3 class="text-2xl font-bold text-indigo-400 mt-1">\${totalClicks}</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">FB Bots Shielded</span>
-                                <h3 class="text-2xl font-bold text-emerald-400 mt-1">\${totalBots}</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Database Status</span>
-                                <h3 class="text-sm font-bold text-emerald-400 mt-2">Active (JSON File)</h3>
-                            </div>
-                        </div>
+                let linksListHTML = '';
+                if (state.links.length === 0) {
+                    linksListHTML = '<p class="text-xs text-slate-500">No permanent links created yet. Click "Create Short Link" above!</p>';
+                } else {
+                    linksListHTML = state.links.map(l => {
+                        return '<div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">' +
+                            '<div class="flex items-start space-x-3">' +
+                                (l.previewImage ? '<img src="' + l.previewImage + '" class="w-16 h-12 object-cover rounded border border-slate-800 shrink-0">' : '') +
+                                '<div>' +
+                                    '<p class="font-bold text-white text-sm mb-1">' + l.title + '</p>' +
+                                    '<a href="' + l.shortUrl + '" target="_blank" class="font-bold text-indigo-400 font-mono text-xs underline">' + l.shortUrl + '</a>' +
+                                    '<p class="text-slate-400 mt-1"><i class="fa-solid fa-bullseye text-indigo-400 mr-1"></i>Target: ' + l.target + '</p>' +
+                                    '<p class="text-slate-500"><i class="fa-solid fa-shield-cat text-emerald-400 mr-1"></i>Safe Page: ' + l.safePage + '</p>' +
+                                '</div>' +
+                            '</div>' +
+                            '<div class="flex items-center space-x-2">' +
+                                '<span class="bg-slate-900 text-slate-300 px-2.5 py-1 rounded">Clicks: ' + l.clicks + ' | Bots: ' + l.botShielded + '</span>' +
+                                '<button onclick="navigator.clipboard.writeText(\'' + l.shortUrl + '\'); alert(\'Link Copied!\');" class="bg-indigo-600/20 text-indigo-300 px-3 py-1.5 rounded border border-indigo-500/30 hover:bg-indigo-600/40">Copy</button>' +
+                            '</div>' +
+                        '</div>';
+                    }).join('');
+                }
 
-                        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-                            <div class="flex justify-between items-center">
-                                <h3 class="text-base font-bold text-white">Active Permanent Links</h3>
-                                <button onclick="openCreateModal()" class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold">New Link</button>
-                            </div>
-                            \${state.links.length === 0 ? '<p class="text-xs text-slate-500">No permanent links created yet. Click "Create Short Link" above!</p>' : ''}
-                            <div class="space-y-3">
-                                \${state.links.map(l => \`
-                                    <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-                                        <div class="flex items-start space-x-3">
-                                            \${l.previewImage ? \`<img src="\${l.previewImage}" class="w-16 h-12 object-cover rounded border border-slate-800 shrink-0">\` : ''}
-                                            <div>
-                                                <p class="font-bold text-white text-sm mb-1">\${l.title}</p>
-                                                <a href="\${l.shortUrl}" target="_blank" class="font-bold text-indigo-400 font-mono text-xs underline">\${l.shortUrl}</a>
-                                                <p class="text-slate-400 mt-1"><i class="fa-solid fa-bullseye text-indigo-400 mr-1"></i>Target: \${l.target}</p>
-                                                <p class="text-slate-500"><i class="fa-solid fa-shield-cat text-emerald-400 mr-1"></i>Safe Page: \${l.safePage}</p>
-                                            </div>
-                                        </div>
-                                        <div class="flex items-center space-x-2">
-                                            <span class="bg-slate-900 text-slate-300 px-2.5 py-1 rounded">Clicks: \${l.clicks} | Bots: \${l.botShielded}</span>
-                                            <button onclick="navigator.clipboard.writeText('\${l.shortUrl}'); alert('Copied!');" class="bg-indigo-600/20 text-indigo-300 px-3 py-1.5 rounded border border-indigo-500/30">Copy</button>
-                                        </div>
-                                    </div>
-                                \`).join('')}
-                            </div>
-                        </div>
-                    </div>
-                \`;
+                container.innerHTML = 
+                    '<div class="space-y-6">' +
+                        '<div class="grid grid-cols-1 md:grid-cols-4 gap-4">' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">Total Permanent Links</span>' +
+                                '<h3 class="text-2xl font-bold text-white mt-1">' + state.links.length + '</h3>' +
+                            '</div>' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">Real Audience Clicks</span>' +
+                                '<h3 class="text-2xl font-bold text-indigo-400 mt-1">' + totalClicks + '</h3>' +
+                            '</div>' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">FB Bots Shielded</span>' +
+                                '<h3 class="text-2xl font-bold text-emerald-400 mt-1">' + totalBots + '</h3>' +
+                            '</div>' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">Database Status</span>' +
+                                '<h3 class="text-sm font-bold text-emerald-400 mt-2">Active (JSON File)</h3>' +
+                            '</div>' +
+                        '</div>' +
+
+                        '<div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">' +
+                            '<div class="flex justify-between items-center">' +
+                                '<h3 class="text-base font-bold text-white">Active Permanent Links</h3>' +
+                                '<button onclick="openCreateModal()" class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold">New Link</button>' +
+                            '</div>' +
+                            '<div class="space-y-3">' + linksListHTML + '</div>' +
+                        '</div>' +
+                    '</div>';
             } else if (tab === 'analytics') {
-                container.innerHTML = \`
-                    <div class="space-y-6">
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Tracked Impressions</span>
-                                <h3 class="text-xl font-bold text-white mt-1">\${totalClicks + totalBots}</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Human Conversion Rate</span>
-                                <h3 class="text-xl font-bold text-emerald-400 mt-1">100% Safe Route</h3>
-                            </div>
-                            <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
-                                <span class="text-xs text-slate-400 uppercase">Top Traffic Source</span>
-                                <h3 class="text-xl font-bold text-indigo-400 mt-1">Facebook & Instagram Ads</h3>
-                            </div>
-                        </div>
-                    </div>
-                \`;
+                container.innerHTML = 
+                    '<div class="space-y-6">' +
+                        '<div class="grid grid-cols-1 md:grid-cols-3 gap-4">' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">Tracked Impressions</span>' +
+                                '<h3 class="text-xl font-bold text-white mt-1">' + (totalClicks + totalBots) + '</h3>' +
+                            '</div>' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">Human Conversion Rate</span>' +
+                                '<h3 class="text-xl font-bold text-emerald-400 mt-1">100% Safe Route</h3>' +
+                            '</div>' +
+                            '<div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl">' +
+                                '<span class="text-xs text-slate-400 uppercase">Top Traffic Source</span>' +
+                                '<h3 class="text-xl font-bold text-indigo-400 mt-1">Facebook & Instagram Ads</h3>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>';
             } else {
-                container.innerHTML = \`
-                    <div class="bg-slate-900 border border-slate-800 p-8 rounded-2xl text-center space-y-2">
-                        <i class="fa-solid fa-layer-group text-3xl text-indigo-500 mb-2"></i>
-                        <h3 class="text-lg font-bold text-white capitalize">\${tab.replace('-', ' ')} Module Active</h3>
-                        <p class="text-xs text-slate-400">Database connected and syncing permanently with your server storage.</p>
-                    </div>
-                \`;
+                container.innerHTML = 
+                    '<div class="bg-slate-900 border border-slate-800 p-8 rounded-2xl text-center space-y-2">' +
+                        '<i class="fa-solid fa-layer-group text-3xl text-indigo-500 mb-2"></i>' +
+                        '<h3 class="text-lg font-bold text-white capitalize">' + tab.replace('-', ' ') + ' Module Active</h3>' +
+                        '<p class="text-xs text-slate-400">Database connected and syncing permanently with your server storage.</p>' +
+                    '</div>';
             }
         }
 
@@ -532,7 +533,7 @@ app.get('/', (req, res) => {
             const previewDescription = document.getElementById('modal-preview-desc').value;
             const previewImage = document.getElementById('modal-preview-image').value;
 
-            if(!targetUrl) { alert('Please enter a destination URL'); return; }
+            if(!targetUrl) { alert('Please enter a destination target URL'); return; }
 
             try {
                 const res = await fetch('/api/create-link', {
@@ -548,12 +549,12 @@ app.get('/', (req, res) => {
                 if(res.ok) {
                     closeCreateModal();
                     await fetchData();
-                    alert("Success! Working short link generated:\n" + data.shortUrl);
+                    alert("Success! Generated Link:\n" + data.shortUrl);
                 } else {
-                    alert("Failed to create link.");
+                    alert("Failed to create link: " + (data.error || 'Server error'));
                 }
             } catch(e) {
-                alert("Server error connecting to backend.");
+                alert("Server error connecting to backend API.");
             }
         }
 
