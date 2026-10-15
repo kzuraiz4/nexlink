@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-app.use(express.json());
+// Increased JSON body limit to 10MB to support uploaded preview image files
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
 // Permanent local database file path
@@ -135,7 +136,7 @@ app.get('/api/get-data', (req, res) => {
     res.json({ links });
 });
 
-// --- CORE REDIRECTION ROUTER (Placed before dashboard loader) ---
+// --- CORE REDIRECTION ROUTER (Generates Dynamic Social Meta Cards) ---
 app.get('/:slug', (req, res, next) => {
     const slug = req.params.slug;
     if (slug === 'favicon.ico' || slug === 'api') return next();
@@ -330,7 +331,7 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- CREATE LINK MODAL WITH CUSTOM PICTURE INPUT -->
+    <!-- CREATE LINK MODAL WITH FILE UPLOAD PREVIEW -->
     <div id="create-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm hidden overflow-y-auto py-10">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 space-y-5 my-auto shadow-2xl">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -383,10 +384,25 @@ app.get('/', (req, res) => {
                     <input type="text" id="modal-preview-title" placeholder="Preview title" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
                     <input type="text" id="modal-preview-desc" placeholder="Preview description" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
 
-                    <div>
-                        <label class="block font-semibold text-slate-300 uppercase mb-1">Preview Image URL</label>
-                        <input type="url" id="modal-preview-image" placeholder="https://example.com/image.jpg" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
-                        <p class="text-[10px] text-slate-500 mt-1">Paste a direct image link to customize your social preview card.</p>
+                    <!-- PREVIEW IMAGE FILE UPLOAD + URL INPUT -->
+                    <div class="space-y-2">
+                        <label class="block font-semibold text-slate-300 uppercase">Preview Image Card</label>
+                        
+                        <div class="flex items-center space-x-3">
+                            <label class="flex-1 cursor-pointer bg-slate-900 border border-dashed border-indigo-500/50 hover:border-indigo-500 rounded-lg p-3 text-center transition">
+                                <i class="fa-solid fa-cloud-arrow-up text-indigo-400 text-lg mb-1 block"></i>
+                                <span class="text-xs text-slate-300 font-medium block">Upload Image File</span>
+                                <span class="text-[10px] text-slate-500 block">PNG, JPG, WEBP (Max 5MB)</span>
+                                <input type="file" id="modal-preview-file" accept="image/*" onchange="handleFileSelect(event)" class="hidden">
+                            </label>
+
+                            <div class="w-24 h-20 bg-slate-900 border border-slate-800 rounded-lg overflow-hidden flex items-center justify-center relative shrink-0">
+                                <img id="preview-img-tag" src="" class="w-full h-full object-cover hidden">
+                                <span id="preview-img-placeholder" class="text-[10px] text-slate-600 text-center px-1">No Image Selected</span>
+                            </div>
+                        </div>
+
+                        <input type="url" id="modal-preview-image" placeholder="Or paste direct Image URL (https://...)" oninput="handleUrlInput(event)" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white focus:border-indigo-500 focus:outline-none">
                     </div>
                 </div>
             </div>
@@ -400,6 +416,8 @@ app.get('/', (req, res) => {
 
     <script>
         let isSignupMode = false;
+        let uploadedImageBase64 = "";
+
         const state = {
             activeTab: 'overview',
             links: []
@@ -414,6 +432,44 @@ app.get('/', (req, res) => {
                 fetchData();
             }
         };
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (file.size > 5 * 1024 * 1024) {
+                alert("File size exceeds 5MB limit.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                uploadedImageBase64 = e.target.result;
+                document.getElementById('modal-preview-image').value = uploadedImageBase64;
+                showImagePreview(uploadedImageBase64);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function handleUrlInput(event) {
+            const url = event.target.value.trim();
+            uploadedImageBase64 = url;
+            showImagePreview(url);
+        }
+
+        function showImagePreview(src) {
+            const imgTag = document.getElementById('preview-img-tag');
+            const placeholder = document.getElementById('preview-img-placeholder');
+            if (src) {
+                imgTag.src = src;
+                imgTag.classList.remove('hidden');
+                placeholder.classList.add('hidden');
+            } else {
+                imgTag.src = '';
+                imgTag.classList.add('hidden');
+                placeholder.classList.remove('hidden');
+            }
+        }
 
         function toggleAuthMode() {
             isSignupMode = !isSignupMode;
@@ -534,12 +590,14 @@ app.get('/', (req, res) => {
                             <div class="space-y-3">
                                 \${state.links.map(l => \`
                                     <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-                                        <div>
-                                            <p class="font-bold text-white text-sm mb-1">\${l.title}</p>
-                                            <a href="\${l.shortUrl}" target="_blank" class="font-bold text-indigo-400 font-mono text-xs underline">\${l.shortUrl}</a>
-                                            <p class="text-slate-400 mt-1"><i class="fa-solid fa-bullseye text-indigo-400 mr-1"></i>Target: \${l.target}</p>
-                                            <p class="text-slate-500"><i class="fa-solid fa-shield-cat text-emerald-400 mr-1"></i>Safe Page: \${l.safePage}</p>
-                                            \${l.previewTitle ? \`<p class="text-indigo-300 mt-1"><i class="fa-regular fa-image mr-1"></i>Card Title: \${l.previewTitle}</p>\` : ''}
+                                        <div class="flex items-start space-x-3">
+                                            \${l.previewImage ? \`<img src="\${l.previewImage}" class="w-16 h-12 object-cover rounded border border-slate-800 shrink-0">\` : ''}
+                                            <div>
+                                                <p class="font-bold text-white text-sm mb-1">\${l.title}</p>
+                                                <a href="\${l.shortUrl}" target="_blank" class="font-bold text-indigo-400 font-mono text-xs underline">\${l.shortUrl}</a>
+                                                <p class="text-slate-400 mt-1"><i class="fa-solid fa-bullseye text-indigo-400 mr-1"></i>Target: \${l.target}</p>
+                                                <p class="text-slate-500"><i class="fa-solid fa-shield-cat text-emerald-400 mr-1"></i>Safe Page: \${l.safePage}</p>
+                                            </div>
                                         </div>
                                         <div class="flex items-center space-x-2">
                                             <span class="bg-slate-900 text-slate-300 px-2.5 py-1 rounded">Clicks: \${l.clicks} | Bots: \${l.botShielded}</span>
@@ -613,7 +671,7 @@ app.get('/', (req, res) => {
                 if(res.ok) {
                     closeCreateModal();
                     await fetchData();
-                    alert("Success! Working short link generated:\\n" + data.shortUrl);
+                    alert("Success! Working short link generated:\n" + data.shortUrl);
                 } else {
                     alert("Failed to create link.");
                 }
@@ -622,7 +680,11 @@ app.get('/', (req, res) => {
             }
         }
 
-        function openCreateModal() { document.getElementById('create-modal').classList.remove('hidden'); }
+        function openCreateModal() { 
+            uploadedImageBase64 = "";
+            showImagePreview("");
+            document.getElementById('create-modal').classList.remove('hidden'); 
+        }
         function closeCreateModal() { document.getElementById('create-modal').classList.add('hidden'); }
     </script>
 </body>
