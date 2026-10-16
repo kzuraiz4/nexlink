@@ -7,6 +7,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'db.json');
 
+// Supabase Configuration (Set these in Render -> Environment Variables)
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
+const IS_SUPABASE_ENABLED = Boolean(SUPABASE_URL && SUPABASE_KEY);
+
 // Critical for Render.com so req.protocol is always 'https'
 app.set('trust proxy', true);
 
@@ -15,35 +20,103 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ==========================================
-// 1. PERSISTENT STORAGE ENGINE (db.json)
+// 1. HYBRID STORAGE ENGINE (Supabase + db.json)
 // ==========================================
-function initDB() {
+let memoryDB = { links: [], logs: [] };
+let lastCloudSync = null;
+
+function initLocalDB() {
   if (!fs.existsSync(DB_FILE)) {
-    const seedData = {
-      links: [],
-      logs: []
-    };
-    fs.writeFileSync(DB_FILE, JSON.stringify(seedData, null, 2), 'utf8');
+    fs.writeFileSync(DB_FILE, JSON.stringify(memoryDB, null, 2), 'utf8');
+  } else {
+    try {
+      memoryDB = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    } catch (err) {
+      memoryDB = { links: [], logs: [] };
+    }
+  }
+}
+
+// Pull permanent state from Supabase on server boot
+async function pullFromSupabase() {
+  initLocalDB();
+  if (!IS_SUPABASE_ENABLED) {
+    console.log('⚠️ SUPABASE_URL / SUPABASE_KEY not set. Running on local db.json only.');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/nexlink_store?id=eq.1&select=data`, {
+      method: 'GET',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const rows = await res.json();
+
+    if (rows && rows.length > 0 && rows[0].data) {
+      memoryDB = {
+        links: Array.isArray(rows[0].data.links) ? rows[0].data.links : [],
+        logs: Array.isArray(rows[0].data.logs) ? rows[0].data.logs : []
+      };
+      fs.writeFileSync(DB_FILE, JSON.stringify(memoryDB, null, 2), 'utf8');
+      lastCloudSync = new Date().toISOString();
+      console.log(`✅ Restored ${memoryDB.links.length} permanent links from Supabase.`);
+    } else {
+      // First run: seed row 1 in Supabase
+      await pushToSupabase(memoryDB);
+    }
+  } catch (err) {
+    console.error('❌ Supabase pull error (using local db.json fallback):', err.message);
+  }
+}
+
+// Push updated state to Supabase asynchronously
+async function pushToSupabase(data) {
+  if (!IS_SUPABASE_ENABLED) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/nexlink_store`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify({
+        id: 1,
+        data: data,
+        updated_at: new Date().toISOString()
+      })
+    });
+
+    if (res.ok) {
+      lastCloudSync = new Date().toISOString();
+    } else {
+      console.error('❌ Supabase push failed:', await res.text());
+    }
+  } catch (err) {
+    console.error('❌ Supabase network error:', err.message);
   }
 }
 
 function readDB() {
-  initDB();
-  try {
-    const raw = fs.readFileSync(DB_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch (err) {
-    console.error('Error reading db.json:', err);
-    return { links: [], logs: [] };
-  }
+  return memoryDB;
 }
 
 function writeDB(data) {
+  memoryDB = data;
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(DB_FILE, JSON.stringify(memoryDB, null, 2), 'utf8');
   } catch (err) {
-    console.error('Error writing db.json:', err);
+    console.error('Error writing local db.json:', err);
   }
+  // Non-blocking background sync to Supabase
+  pushToSupabase(memoryDB);
 }
 
 // ==========================================
@@ -108,7 +181,6 @@ function getBaseUrl(req) {
 // 3. API ROUTES
 // ==========================================
 
-// Fetch all links, telemetry logs, and aggregated metrics
 app.get('/api/get-data', (req, res) => {
   const db = readDB();
   const totalHuman = db.links.reduce((acc, item) => acc + (item.humanClicks || 0), 0);
@@ -116,6 +188,10 @@ app.get('/api/get-data', (req, res) => {
 
   res.json({
     success: true,
+    cloud: {
+      enabled: IS_SUPABASE_ENABLED,
+      lastSync: lastCloudSync
+    },
     stats: {
       totalLinks: db.links.length,
       totalHumanClicks: totalHuman,
@@ -128,7 +204,27 @@ app.get('/api/get-data', (req, res) => {
   });
 });
 
-// Create a cloaked short link
+// Force cloud pull from UI
+app.post('/api/cloud-sync', async (req, res) => {
+  await pullFromSupabase();
+  res.json({ success: true, enabled: IS_SUPABASE_ENABLED, lastSync: lastCloudSync });
+});
+
+// Import / Restore JSON backup into db.json + Supabase
+app.post('/api/import-data', (req, res) => {
+  const { links, logs } = req.body;
+  if (!Array.isArray(links)) {
+    return res.status(400).json({ success: false, error: 'Invalid backup file format.' });
+  }
+  const restored = {
+    links,
+    logs: Array.isArray(logs) ? logs : []
+  };
+  writeDB(restored);
+  res.json({ success: true, count: links.length });
+});
+
+// Create a permanent cloaked short link
 app.post('/api/create-link', (req, res) => {
   const {
     slug,
@@ -205,7 +301,7 @@ app.delete('/api/delete-link/:slug', (req, res) => {
   res.json({ success: true });
 });
 
-// Serve uploaded Base64 image as a proper binary image with Content-Length for FB/WhatsApp scrapers
+// Serve uploaded Base64 image as binary with Content-Length for FB/WhatsApp scrapers
 app.get('/api/og-image/:slug', (req, res) => {
   const db = readDB();
   const link = db.links.find(l => l.slug.toLowerCase() === req.params.slug.toLowerCase());
@@ -285,21 +381,16 @@ app.get('/:slug', (req, res) => {
     if (db.logs.length > 200) db.logs.pop();
     writeDB(db);
 
-    // Optional explicit 302 to Safe URL if ?safe_redirect=1 is called
     if (forceSafeRedirect) {
       return res.redirect(302, link.safeUrl);
     }
 
-    // Build cache-busted HTTPS URL for the uploaded image so social crawlers ALWAYS fetch your uploaded image
     const ogImageUrl = link.ogImage
       ? (link.ogImage.startsWith('data:image')
           ? `${baseUrl}/api/og-image/${link.slug}?v=${link.id}`
           : link.ogImage)
       : 'https://placehold.co/1200x630/09090b/ffffff.png?text=Preview';
 
-    // CRITICAL FIX:
-    // 1. og:url MUST point to currentShortUrl (NOT safeUrl), otherwise Facebook/WhatsApp discards your image and scrapes Wikipedia!
-    // 2. Do NOT include <meta http-equiv="refresh"> or <link rel="canonical">, because crawlers follow them and overwrite your OG image.
     res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html>
 <html lang="en" prefix="og: https://ogp.me/ns#">
 <head>
@@ -308,7 +399,7 @@ app.get('/:slug', (req, res) => {
   <title>${escapeHtml(link.ogTitle)}</title>
   <meta name="description" content="${escapeHtml(link.ogDesc)}" />
 
-  <!-- Open Graph (Facebook, WhatsApp, Messenger, LinkedIn, iMessage) -->
+  <!-- Open Graph (Locked to currentShortUrl so uploaded image always displays) -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="${escapeHtml(link.domain || req.get('host'))}" />
   <meta property="og:url" content="${escapeHtml(currentShortUrl)}" />
@@ -340,7 +431,7 @@ app.get('/:slug', (req, res) => {
     return;
   }
 
-  // Real Human Visitor -> Instant 302 Redirect to Destination Target URL
+  // Real Human Visitor -> Instant 302 Redirect
   db.links[linkIndex].humanClicks = (db.links[linkIndex].humanClicks || 0) + 1;
   db.logs.unshift({
     id: 'log_' + Date.now(),
@@ -387,14 +478,14 @@ function renderDashboardHTML() {
         <div class="w-7 h-7 rounded-lg bg-white text-zinc-950 flex items-center justify-center font-bold text-xs">N</div>
         <div class="flex items-center gap-2">
           <span class="font-semibold text-sm tracking-tight text-white">NexLink.io</span>
-          <span class="text-[10px] mono px-2 py-0.5 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">v2.7 Minimal</span>
+          <span class="text-[10px] mono px-2 py-0.5 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">v2.8 Cloud</span>
         </div>
       </div>
 
       <div class="flex items-center gap-2.5">
-        <div class="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-400">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-          <span>Engine Active</span>
+        <div id="cloud-badge" class="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-400">
+          <span id="cloud-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          <span id="cloud-status-text">Checking Storage...</span>
         </div>
         <button onclick="fetchDashboardData()" class="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-medium border border-zinc-800 transition">
           <i class="fa-solid fa-rotate-right mr-1 text-[10px]"></i> Sync
@@ -413,7 +504,7 @@ function renderDashboardHTML() {
     <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4">
         <div class="flex items-center justify-between text-[11px] text-zinc-500">
-          <span>01 / Active Links</span>
+          <span>01 / Permanent Links</span>
           <i class="fa-solid fa-link text-zinc-600"></i>
         </div>
         <div id="stat-total-links" class="text-2xl font-semibold text-white mt-1.5 mono">0</div>
@@ -486,7 +577,6 @@ function renderDashboardHTML() {
             </select>
           </div>
 
-          <!-- Exact Social Media Preview Card -->
           <div class="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 mb-4">
             <div class="h-40 bg-zinc-900 relative overflow-hidden">
               <img id="sim-og-img" src="https://placehold.co/1200x630/09090b/ffffff.png?text=Preview" alt="OG" class="w-full h-full object-cover" />
@@ -620,15 +710,21 @@ function renderDashboardHTML() {
         <span class="text-[10px] mono px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-400">SSL Proxy Ready</span>
       </div>
 
-      <!-- Module 11: Persistence Engine -->
-      <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
+      <!-- Module 11: Supabase + Local JSON Persistence Engine -->
+      <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between gap-2">
         <div>
-          <span class="text-[10px] mono uppercase text-zinc-500">11 / Storage Engine</span>
-          <div class="text-xs font-medium text-white mt-0.5">Local <code class="mono text-zinc-300">db.json</code> Store</div>
+          <span class="text-[10px] mono uppercase text-zinc-500">11 / Permanent Storage</span>
+          <div id="storage-mode-label" class="text-xs font-medium text-white mt-0.5">Supabase + db.json</div>
         </div>
-        <button onclick="exportDatabaseJSON()" class="px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition">
-          Export JSON
-        </button>
+        <div class="flex items-center gap-1.5">
+          <input id="import-json-input" type="file" accept=".json" onchange="importDatabaseJSON(event)" class="hidden" />
+          <button onclick="document.getElementById('import-json-input').click()" class="px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition">
+            Import
+          </button>
+          <button onclick="exportDatabaseJSON()" class="px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition">
+            Export
+          </button>
+        </div>
       </div>
 
       <!-- Module 12: Core API Status -->
@@ -650,7 +746,7 @@ function renderDashboardHTML() {
     <div class="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl my-8">
       <div class="flex items-center justify-between pb-4 border-b border-zinc-800">
         <div>
-          <h3 class="text-sm font-semibold text-white">Create Cloaked Short Link</h3>
+          <h3 class="text-sm font-semibold text-white">Create Permanent Cloaked Link</h3>
           <p class="text-xs text-zinc-400">Humans 302 redirect to Target URL. Social bots render your exact uploaded OG image.</p>
         </div>
         <button onclick="closeCreateModal()" class="w-7 h-7 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs">
@@ -711,7 +807,7 @@ function renderDashboardHTML() {
           <div class="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
             <button type="button" onclick="closeCreateModal()" class="px-3.5 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-xs text-zinc-300">Cancel</button>
             <button type="submit" class="px-4 py-2 rounded-lg bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition">
-              Deploy Short Link
+              Deploy Permanent Link
             </button>
           </div>
         </div>
@@ -732,7 +828,7 @@ function renderDashboardHTML() {
             </div>
           </div>
           <div class="text-[11px] text-zinc-500 mt-3">
-            Tip: Images are automatically compressed & served via <code class="mono text-zinc-300">/api/og-image/:slug</code> so social crawlers never show the Wikipedia preview.
+            Synced automatically to Supabase PostgreSQL so links stay permanent across Render restarts.
           </div>
         </div>
       </form>
@@ -745,7 +841,7 @@ function renderDashboardHTML() {
   </div>
 
   <script>
-    let appState = { links: [], logs: [], stats: {} };
+    let appState = { links: [], logs: [], stats: {}, cloud: {} };
     let uploadedBase64Image = '';
 
     function initHostDomains() {
@@ -764,12 +860,29 @@ function renderDashboardHTML() {
         const data = await res.json();
         if (!data.success) return;
         appState = data;
+        renderCloudStatus();
         renderStats();
         renderLinksTable();
         renderLogs();
         populateSimulatorSelect();
       } catch (e) {
         console.error(e);
+      }
+    }
+
+    function renderCloudStatus() {
+      const dot = document.getElementById('cloud-dot');
+      const txt = document.getElementById('cloud-status-text');
+      const modeLabel = document.getElementById('storage-mode-label');
+
+      if (appState.cloud && appState.cloud.enabled) {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
+        txt.textContent = 'Supabase Permanent Sync';
+        modeLabel.innerHTML = '<span class="text-emerald-400">Supabase Cloud</span> + db.json';
+      } else {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400';
+        txt.textContent = 'Local Mode (Add SUPABASE_URL)';
+        modeLabel.innerHTML = 'Local <code class="mono text-zinc-300">db.json</code> (Ephemeral)';
       }
     }
 
@@ -919,7 +1032,6 @@ function renderDashboardHTML() {
       syncModalPreview();
     }
 
-    // Compress & resize uploaded image to 1200x630 JPEG so social scrapers load it fast
     function handleBase64Upload(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -1002,20 +1114,48 @@ function renderDashboardHTML() {
 
     function copyToClipboard(text) {
       navigator.clipboard.writeText(text);
+      showToast('Copied: ' + text);
+    }
+
+    function showToast(msg) {
       const toast = document.getElementById('toast');
-      document.getElementById('toast-msg').textContent = 'Copied: ' + text;
+      document.getElementById('toast-msg').textContent = msg;
       toast.classList.remove('hidden');
       setTimeout(() => toast.classList.add('hidden'), 2500);
     }
 
     function exportDatabaseJSON() {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appState, null, 2));
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ links: appState.links, logs: appState.logs }, null, 2));
       const a = document.createElement('a');
       a.setAttribute("href", dataStr);
-      a.setAttribute("download", "nexlink-db.json");
+      a.setAttribute("download", "nexlink-backup.json");
       document.body.appendChild(a);
       a.click();
       a.remove();
+    }
+
+    function importDatabaseJSON(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          const parsed = JSON.parse(e.target.result);
+          const res = await fetch('/api/import-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(parsed)
+          });
+          const result = await res.json();
+          if (result.success) {
+            await fetchDashboardData();
+            showToast(\`Restored \${result.count} links to Supabase & db.json\`);
+          }
+        } catch (err) {
+          alert('Invalid JSON backup file');
+        }
+      };
+      reader.readAsText(file);
     }
 
     initHostDomains();
@@ -1025,7 +1165,9 @@ function renderDashboardHTML() {
 </html>`;
 }
 
-app.listen(PORT, () => {
-  initDB();
-  console.log(`NexLink.io running on port ${PORT}`);
+// Boot Sequence: Pull permanent links from Supabase BEFORE accepting traffic
+pullFromSupabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 NexLink.io running on port ${PORT} | Supabase Sync: ${IS_SUPABASE_ENABLED ? 'ENABLED' : 'LOCAL ONLY'}`);
+  });
 });
