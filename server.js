@@ -42,7 +42,8 @@ async function pullFromSupabase() {
   initLocalDB();
   if (!IS_SUPABASE_ENABLED) return;
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/nexlink_store?id=eq.1&select=data`, { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/nexlink_store?id=eq.1&select=data`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     });
     if (!res.ok) throw new Error(await res.text());
     const rows = await res.json();
@@ -56,7 +57,7 @@ async function pullFromSupabase() {
       };
       fs.writeFileSync(DB_FILE, JSON.stringify(memoryDB, null, 2), 'utf8');
       lastCloudSync = new Date().toISOString();
-      console.log(`✅ Restored DB from Supabase (Users: ${memoryDB.users.length}, Links:${memoryDB.links.length})`);
+      console.log(`✅ Restored DB from Supabase (Users: ${memoryDB.users.length}, Links: ${memoryDB.links.length})`);
     } else {
       await pushToSupabase(memoryDB);
     }
@@ -68,7 +69,10 @@ async function pullFromSupabase() {
 async function pushToSupabase(data) {
   if (!IS_SUPABASE_ENABLED) return;
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/nexlink_store`, { method: 'POST', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/nexlink_store`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
         'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates'
       },
       body: JSON.stringify({ id: 1, data, updated_at: new Date().toISOString() })
@@ -203,7 +207,8 @@ app.post('/api/create-link', requireAuth, (req, res) => {
   if (!targetUrl) return res.status(400).json({ success: false, error: 'Destination URL required.' });
 
   let cleanSlug = (slug || '').trim().replace(/[^a-zA-Z0-9-_]/g, '') || Math.random().toString(36).substring(2, 8);
-  if (['api', 'favicon.ico', 'robots.txt'].includes(cleanSlug.toLowerCase())) cleanSlug += `-${Math.floor(Math.random() * 999)}`; if (memoryDB.links.some(l => l.slug.toLowerCase() === cleanSlug.toLowerCase())) return res.status(409).json({ success: false, error: `Slug "/${cleanSlug}" already exists.` });
+  if (['api', 'favicon.ico', 'robots.txt'].includes(cleanSlug.toLowerCase())) cleanSlug += `-${Math.floor(Math.random() * 999)}`;
+  if (memoryDB.links.some(l => l.slug.toLowerCase() === cleanSlug.toLowerCase())) return res.status(409).json({ success: false, error: `Slug "/${cleanSlug}" already exists.` });
 
   const newLink = {
     id: 'lnk_' + Date.now(),
@@ -514,4 +519,400 @@ function renderDashboardHTML() {
               <button onclick="addCustomDomain()" class="px-3 py-1.5 rounded-lg bg-white text-zinc-950 text-xs font-semibold hover:bg-zinc-200 transition">Add</button>
             </div>
           </div>
-          <div
+          <div id="domains-list" class="flex-1 overflow-y-auto space-y-2 pr-1 text-xs"></div>
+        </div>
+
+      </section>
+
+      <!-- MODULES 10, 11, 12: COMPACT SYSTEM FOOTER MODULES -->
+      <section class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        
+        <!-- Module 10: User Profile -->
+        <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <span class="text-[10px] mono uppercase text-zinc-500">10 / Session User</span>
+            <div id="session-email" class="text-xs font-medium text-white mt-0.5">user@example.com</div>
+          </div>
+          <span class="text-[10px] mono px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-400">Authenticated</span>
+        </div>
+
+        <!-- Module 11: Persistence Engine -->
+        <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <span class="text-[10px] mono uppercase text-zinc-500">11 / Permanent Storage</span>
+            <div id="storage-mode-label" class="text-xs font-medium text-white mt-0.5">Supabase + db.json</div>
+          </div>
+        </div>
+
+        <!-- Module 12: Core API Status -->
+        <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <span class="text-[10px] mono uppercase text-zinc-500">12 / Express Router</span>
+            <div class="text-xs font-medium text-white mono mt-0.5">/:slug + /api/og-image/:slug</div>
+          </div>
+          <span class="text-[10px] mono px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">200 OK</span>
+        </div>
+
+      </section>
+    </main>
+  </div>
+
+  <!-- ================= SLEEK LINK CREATION MODAL ================= -->
+  <div id="create-modal" class="fixed inset-0 z-[110] hidden bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl my-8">
+      <div class="flex items-center justify-between pb-4 border-b border-zinc-800">
+        <div>
+          <h3 class="text-sm font-semibold text-white">Create Permanent Cloaked Link</h3>
+          <p class="text-xs text-zinc-400">Humans 302 redirect to Target URL. Social bots render your uploaded OG image.</p>
+        </div>
+        <button onclick="closeCreateModal()" class="w-7 h-7 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center text-xs transition"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form id="create-link-form" onsubmit="submitCreateLink(event)" class="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-5">
+        <div class="lg:col-span-7 space-y-3.5">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[11px] text-zinc-400 mb-1">Domain Prefix</label>
+              <select id="form-domain" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600"></select>
+            </div>
+            <div>
+              <label class="block text-[11px] text-zinc-400 mb-1">Custom Alias / Slug</label>
+              <input id="form-slug" type="text" placeholder="custom-slug (optional)" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white mono focus:outline-none focus:border-zinc-600" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] text-emerald-400 mb-1">Destination Target URL (Real Humans -> 302) *</label>
+            <input id="form-target" type="url" required placeholder="https://your-destination.com/offer" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-emerald-500" />
+          </div>
+          <div>
+            <label class="block text-[11px] text-amber-400 mb-1">Safe Page URL (Fallback / Bot Safe Link) *</label>
+            <input id="form-safe" type="url" required placeholder="https://en.wikipedia.org/wiki/Computing" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-amber-500" />
+          </div>
+
+          <div class="pt-2 border-t border-zinc-800/80 space-y-3">
+            <div class="text-[11px] font-medium text-zinc-300">Social Preview Metadata (Open Graph)</div>
+            <div>
+              <label class="block text-[11px] text-zinc-400 mb-1">OG Title *</label>
+              <input id="form-og-title" oninput="syncModalPreview()" type="text" required placeholder="Enter social card headline" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-zinc-400 mb-1">OG Description</label>
+              <textarea id="form-og-desc" oninput="syncModalPreview()" rows="2" placeholder="Enter social card summary..." class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600"></textarea>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[11px] text-zinc-400 mb-1">Upload Preview Image</label>
+                <input id="form-og-image-file" onchange="handleBase64Upload(event)" type="file" accept="image/*" class="w-full text-xs text-zinc-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-white file:text-zinc-950 hover:file:bg-zinc-200 cursor-pointer" />
+              </div>
+              <div>
+                <label class="block text-[11px] text-zinc-400 mb-1">Or Direct Image URL</label>
+                <input id="form-og-image-url" oninput="handleImageUrlInput()" type="url" placeholder="https://example.com/image.jpg" class="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+              </div>
+            </div>
+          </div>
+          <div id="form-error" class="hidden p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs"></div>
+          <div class="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
+            <button type="button" onclick="closeCreateModal()" class="px-3.5 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-xs text-zinc-300">Cancel</button>
+            <button type="submit" class="px-4 py-2 rounded-lg bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition">Deploy Link</button>
+          </div>
+        </div>
+
+        <div class="lg:col-span-5 bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <span class="text-[10px] mono uppercase text-zinc-500">Live Social Card Preview</span>
+            <div class="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 mt-2">
+              <div class="h-44 bg-zinc-900 overflow-hidden"><img id="modal-preview-img" src="https://placehold.co/1200x630/09090b/ffffff.png?text=Upload+Preview+Image" class="w-full h-full object-cover" /></div>
+              <div class="p-3 border-t border-zinc-800">
+                <div id="modal-preview-domain" class="text-[10px] mono uppercase text-zinc-500 truncate">nexlink.io</div>
+                <div id="modal-preview-title" class="text-xs font-semibold text-white truncate mt-0.5">Your OG Title</div>
+                <div id="modal-preview-desc" class="text-[11px] text-zinc-400 line-clamp-2 mt-0.5">Your uploaded image and text will appear on Facebook, WhatsApp, X, and Telegram.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="fixed bottom-5 right-5 z-[120] hidden px-4 py-2.5 rounded-xl bg-white text-zinc-950 text-xs font-medium shadow-xl"><span id="toast-msg">Copied</span></div>
+
+  <script>
+    let appState = { links: [], logs: [], stats: {}, cloud: {}, domains: [], user: null };
+    let uploadedBase64Image = '';
+    let isLoginMode = true;
+
+    // --- AUTH LOGIC ---
+    function getToken() { return localStorage.getItem('nexlink_token'); }
+    function setToken(t) { localStorage.setItem('nexlink_token', t); }
+
+    function toggleAuthMode() {
+      isLoginMode = !isLoginMode;
+      document.getElementById('auth-btn').textContent = isLoginMode ? 'Log In' : 'Sign Up';
+      document.getElementById('auth-subtitle').textContent = isLoginMode ? 'Login to access your workspace' : 'Register your team account';
+      document.getElementById('auth-toggle-btn').textContent = isLoginMode ? 'Need an account? Sign up' : 'Already have an account? Log in';
+      document.getElementById('auth-error').classList.add('hidden');
+    }
+
+    async function handleAuth(e) {
+      e.preventDefault();
+      const email = document.getElementById('auth-email').value;
+      const password = document.getElementById('auth-password').value;
+      const endpoint = isLoginMode ? '/api/auth/login' : '/api/auth/signup';
+      const errBox = document.getElementById('auth-error');
+      try {
+        const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        setToken(data.token);
+        bootApp();
+      } catch (err) {
+        errBox.textContent = err.message; errBox.classList.remove('hidden');
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('nexlink_token');
+      document.getElementById('app-screen').classList.add('hidden');
+      document.getElementById('auth-screen').classList.remove('hidden');
+    }
+
+    // --- APP LOGIC ---
+    async function bootApp() {
+      const token = getToken();
+      if (!token) return logout();
+      try {
+        const res = await fetch('/api/get-data', { headers: { 'Authorization': \`Bearer \${token}\` } });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!data.success) return;
+        
+        appState = data;
+        document.getElementById('auth-screen').classList.add('hidden');
+        document.getElementById('app-screen').classList.remove('hidden');
+        
+        // Roles & UI Setup
+        const rb = document.getElementById('role-badge');
+        rb.textContent = appState.user.role;
+        rb.className = appState.user.role === 'manager' 
+          ? 'text-[9px] mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase'
+          : 'text-[9px] mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 uppercase';
+        document.getElementById('session-email').textContent = appState.user.email;
+        
+        if (appState.user.role === 'manager') document.getElementById('manager-domain-controls').classList.remove('hidden');
+
+        renderCloudStatus();
+        renderStats();
+        renderLinksTable();
+        renderLogs();
+        populateDomainDropdown();
+        renderDomainsList();
+        populateSimulatorSelect();
+      } catch (e) { console.error(e); }
+    }
+
+    function renderCloudStatus() {
+      const dot = document.getElementById('cloud-dot');
+      const txt = document.getElementById('cloud-status-text');
+      const modeLabel = document.getElementById('storage-mode-label');
+      if (appState.cloud && appState.cloud.enabled) {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
+        txt.textContent = 'Supabase Sync';
+        modeLabel.innerHTML = '<span class="text-emerald-400">Supabase Cloud</span> + db.json';
+      } else {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400';
+        txt.textContent = 'Local Storage Only';
+        modeLabel.innerHTML = 'Local <code class="mono text-zinc-300">db.json</code>';
+      }
+    }
+
+    function renderStats() {
+      const s = appState.stats || {};
+      document.getElementById('stat-total-links').textContent = s.totalLinks || 0;
+      document.getElementById('stat-human-clicks').textContent = s.totalHumanClicks || 0;
+      document.getElementById('stat-bot-hits').textContent = s.totalBotHits || 0;
+
+      const total = (s.totalHumanClicks || 0) + (s.totalBotHits || 0);
+      const humanPct = total > 0 ? Math.round(((s.totalHumanClicks || 0) / total) * 100) : 50;
+      const botPct = total > 0 ? 100 - humanPct : 50;
+      document.getElementById('bar-human').style.width = humanPct + '%';
+      document.getElementById('bar-human-label').textContent = \`\${s.totalHumanClicks || 0} (\${humanPct}%)\`;
+      document.getElementById('bar-bot').style.width = botPct + '%';
+      document.getElementById('bar-bot-label').textContent = \`\${s.totalBotHits || 0} (\${botPct}%)\`;
+    }
+
+    function renderLinksTable() {
+      const tbody = document.getElementById('links-table-body');
+      const filter = (document.getElementById('search-links').value || '').toLowerCase();
+      const filtered = appState.links.filter(l => l.slug.toLowerCase().includes(filter) || l.targetUrl.toLowerCase().includes(filter));
+      if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-zinc-500">No active links. Click "New Link" to create one.</td></tr>'; return; }
+
+      tbody.innerHTML = filtered.map(link => {
+        const shortUrl = \`https://\${link.domain}/\${link.slug}\`;
+        const imgThumb = link.ogImage ? (link.ogImage.startsWith('data:image') ? \`/api/og-image/\${link.slug}?v=\${link.id}\` : link.ogImage) : 'https://placehold.co/120x63/09090b/ffffff.png?text=OG';
+        return \`
+          <tr class="hover:bg-zinc-900/60 transition">
+            <td class="py-3 px-2">
+              <div class="flex items-center gap-1.5">
+                <span class="font-medium text-white mono">/\${link.slug}</span>
+                <button onclick="copyToClipboard('\${shortUrl}')" class="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-[10px]">Copy</button>
+              </div>
+              <div class="text-[9px] text-zinc-500 mono mt-0.5">\${link.domain}</div>
+            </td>
+            <td class="py-3 px-2 max-w-[180px]">
+              <div class="truncate text-emerald-400 text-[11px]" title="Target: \${link.targetUrl}">→ \${link.targetUrl}</div>
+              <div class="truncate text-zinc-500 text-[10px]" title="Safe: \${link.safeUrl}">Safe: \${link.safeUrl}</div>
+            </td>
+            <td class="py-3 px-2 text-[10px] text-zinc-400 truncate max-w-[100px]">\${link.creatorEmail || 'System'}</td>
+            <td class="py-3 px-2 text-center mono text-emerald-400">\${link.humanClicks || 0}</td>
+            <td class="py-3 px-2 text-center mono text-amber-400">\${link.botHits || 0}</td>
+            <td class="py-3 px-2 text-right whitespace-nowrap space-x-1">
+              <button onclick="deleteLink('\${link.slug}')" class="px-2 py-1 rounded bg-zinc-900 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 text-[10px]">Del</button>
+            </td>
+          </tr>\`;
+      }).join('');
+    }
+
+    function renderLogs() {
+      const container = document.getElementById('logs-container');
+      if (!appState.logs || !appState.logs.length) { container.innerHTML = '<div class="text-xs text-zinc-600 text-center py-8">No requests logged yet.</div>'; return; }
+      container.innerHTML = appState.logs.map(log => {
+        const isBot = log.type === 'BOT';
+        const color = isBot ? 'text-amber-400' : 'text-emerald-400';
+        return \`<div class="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800/70 text-[11px] flex items-center justify-between gap-2">
+            <div class="truncate"><span class="mono font-semibold \${color}">[\${log.type}]</span><span class="mono text-white ml-1">/\${log.slug}</span></div>
+            <span class="mono text-[10px] text-zinc-600 shrink-0">\${new Date(log.timestamp).toLocaleTimeString()}</span>
+          </div>\`;
+      }).join('');
+    }
+
+    // --- DOMAINS LOGIC ---
+    function populateDomainDropdown() {
+      const select = document.getElementById('form-domain');
+      let opts = \`<option value="\${window.location.host}">\${window.location.host}</option>\`;
+      appState.domains.forEach(d => { opts += \`<option value="\${d.domain}">\${d.domain}</option>\`; });
+      select.innerHTML = opts;
+    }
+
+    function renderDomainsList() {
+      const container = document.getElementById('domains-list');
+      if (!appState.domains.length) { container.innerHTML = '<div class="text-zinc-600 text-[11px] py-4">No custom domains added.</div>'; return; }
+      container.innerHTML = appState.domains.map(d => \`<div class="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
+          <div><div class="text-zinc-200">\${d.domain}</div><div class="text-[9px] text-zinc-500 mt-0.5">Added by \${d.addedBy}</div></div>
+          \${appState.user.role === 'manager' ? \`<button onclick="deleteCustomDomain('\${d.domain}')" class="text-rose-400 hover:text-rose-300"><i class="fa-solid fa-trash text-[10px]"></i></button>\` : ''}
+        </div>\`).join('');
+    }
+
+    async function addCustomDomain() {
+      const val = document.getElementById('new-domain-input').value;
+      if (!val) return;
+      const res = await fetch('/api/domains', { method: 'POST', headers: { 'Authorization': \`Bearer \${getToken()}\`, 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: val }) });
+      if (res.ok) { document.getElementById('new-domain-input').value = ''; bootApp(); }
+      else { const d = await res.json(); alert(d.error); }
+    }
+    
+    async function deleteCustomDomain(domain) {
+      if (!confirm(\`Remove domain \${domain}?\`)) return;
+      await fetch(\`/api/domains/\${domain}\`, { method: 'DELETE', headers: { 'Authorization': \`Bearer \${getToken()}\` } });
+      bootApp();
+    }
+
+    // --- LINK CREATION & SIMULATION ---
+    function populateSimulatorSelect() {
+      const select = document.getElementById('simulator-slug-select');
+      const prev = select.value;
+      if (!appState.links.length) { select.innerHTML = '<option value="">No links</option>'; return; }
+      select.innerHTML = appState.links.map(l => \`<option value="\${l.slug}">/\${l.slug}</option>\`).join('');
+      if (prev && appState.links.some(l => l.slug === prev)) select.value = prev;
+      updateSimulatorCard();
+    }
+
+    function updateSimulatorCard() {
+      const slug = document.getElementById('simulator-slug-select').value;
+      const link = appState.links.find(l => l.slug === slug);
+      if (!link) return;
+      document.getElementById('sim-domain').textContent = link.domain || window.location.host;
+      document.getElementById('sim-og-title').textContent = link.ogTitle || 'Untitled';
+      document.getElementById('sim-og-desc').textContent = link.ogDesc || '';
+      document.getElementById('sim-og-img').src = link.ogImage ? (link.ogImage.startsWith('data:image') ? \`/api/og-image/\${link.slug}?v=\${link.id}\` : link.ogImage) : 'https://placehold.co/1200x630/09090b/ffffff.png?text=Preview';
+    }
+
+    function triggerSimulatedVisit(mode) {
+      const slug = document.getElementById('simulator-slug-select').value;
+      if (!slug) return;
+      if (mode === 'bot') window.open(\`/\${slug}?bot_preview=1\`, '_blank');
+      else window.open(\`/\${slug}\`, '_blank');
+      setTimeout(bootApp, 800);
+    }
+
+    function openCreateModal() { document.getElementById('form-error').classList.add('hidden'); document.getElementById('create-modal').classList.remove('hidden'); syncModalPreview(); }
+    function closeCreateModal() { document.getElementById('create-modal').classList.add('hidden'); }
+    function handleImageUrlInput() { uploadedBase64Image = ''; document.getElementById('form-og-image-file').value = ''; syncModalPreview(); }
+
+    function handleBase64Upload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const img = new Image();
+        img.onload = function() {
+          const canvas = document.createElement('canvas');
+          const maxW = 1200; const scale = img.width > maxW ? maxW / img.width : 1;
+          canvas.width = Math.round(img.width * scale); canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          uploadedBase64Image = canvas.toDataURL('image/jpeg', 0.85);
+          document.getElementById('form-og-image-url').value = '';
+          syncModalPreview();
+        };
+        img.src = evt.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function syncModalPreview() {
+      document.getElementById('modal-preview-title').textContent = document.getElementById('form-og-title').value || 'Your OG Title';
+      document.getElementById('modal-preview-desc').textContent = document.getElementById('form-og-desc').value || 'Description text here.';
+      document.getElementById('modal-preview-domain').textContent = document.getElementById('form-domain').value || window.location.host;
+      document.getElementById('modal-preview-img').src = uploadedBase64Image || document.getElementById('form-og-image-url').value || 'https://placehold.co/1200x630/09090b/ffffff.png?text=Upload+Preview+Image';
+    }
+
+    async function submitCreateLink(e) {
+      e.preventDefault();
+      const errBox = document.getElementById('form-error'); errBox.classList.add('hidden');
+      const payload = {
+        domain: document.getElementById('form-domain').value, slug: document.getElementById('form-slug').value,
+        targetUrl: document.getElementById('form-target').value, safeUrl: document.getElementById('form-safe').value,
+        ogTitle: document.getElementById('form-og-title').value, ogDesc: document.getElementById('form-og-desc').value,
+        ogImage: uploadedBase64Image || document.getElementById('form-og-image-url').value
+      };
+      try {
+        const res = await fetch('/api/create-link', { method: 'POST', headers: { 'Authorization': \`Bearer \${getToken()}\`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok || !data.success) { errBox.textContent = data.error || 'Error'; errBox.classList.remove('hidden'); return; }
+        document.getElementById('create-link-form').reset(); uploadedBase64Image = ''; closeCreateModal();
+        await bootApp(); copyToClipboard(data.shortUrl);
+      } catch (err) { errBox.textContent = 'Network error.'; errBox.classList.remove('hidden'); }
+    }
+
+    async function deleteLink(slug) {
+      if (!confirm(\`Delete /\${slug}?\`)) return;
+      await fetch(\`/api/delete-link/\${slug}\`, { method: 'DELETE', headers: { 'Authorization': \`Bearer \${getToken()}\` } });
+      bootApp();
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text);
+      const toast = document.getElementById('toast'); document.getElementById('toast-msg').textContent = 'Copied: ' + text;
+      toast.classList.remove('hidden'); setTimeout(() => toast.classList.add('hidden'), 2500);
+    }
+
+    if (getToken()) bootApp();
+  </script>
+</body>
+</html>`;
+}
+
+// BOOT
+pullFromSupabase().then(() => {
+  app.listen(PORT, () => { console.log(`🚀 NexLink Auth Engine running on port ${PORT}`); });
+});
