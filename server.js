@@ -19,7 +19,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ==========================================
-// 1. HYBRID STORAGE ENGINE (Supabase + db.json)
+// 1. HYBRID STORAGE ENGINE
 // ==========================================
 let memoryDB = { links: [], logs: [], users: [], domains: [] };
 let lastCloudSync = null;
@@ -112,7 +112,7 @@ function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ success: false, error: 'Unauthorized. Please log in.' });
 
   const user = memoryDB.users.find(u => u.token === token);
-  if (!user) return res.status(401).json({ success: false, error: 'Invalid or expired session.' });
+  if (!user) return res.status(401).json({ success: false, error: 'Invalid session.' });
 
   req.user = user;
   next();
@@ -165,7 +165,7 @@ app.get('/api/get-data', requireAuth, (req, res) => {
   const { user } = req;
   const accessibleLinks = user.role === 'manager' ? memoryDB.links : memoryDB.links.filter(l => l.userId === user.id);
   const accessibleLinkSlugs = new Set(accessibleLinks.map(l => l.slug));
-  const accessibleLogs = memoryDB.logs.filter(log => accessibleLinkSlugs.has(log.slug)).slice(0, 100);
+  const accessibleLogs = memoryDB.logs.filter(log => accessibleLinkSlugs.has(log.slug)); // Return all for charting
 
   res.json({
     success: true,
@@ -177,7 +177,7 @@ app.get('/api/get-data', requireAuth, (req, res) => {
       totalBotHits: accessibleLinks.reduce((acc, item) => acc + (item.botHits || 0), 0)
     },
     links: accessibleLinks,
-    logs: accessibleLogs,
+    logs: accessibleLogs, // All accessible logs sent to frontend for analytics graph
     domains: memoryDB.domains
   });
 });
@@ -275,7 +275,7 @@ app.get('/:slug', (req, res) => {
   if (botDetected) {
     memoryDB.links[linkIndex].botHits = (memoryDB.links[linkIndex].botHits || 0) + 1;
     memoryDB.logs.unshift({ id: 'log_' + Date.now(), slug: link.slug, type: 'BOT', ua: ua.substring(0, 140), ip, action: `Cloaked -> Served Uploaded OG Card`, timestamp: new Date().toISOString() });
-    if (memoryDB.logs.length > 200) memoryDB.logs.pop();
+    if (memoryDB.logs.length > 2500) memoryDB.logs.pop(); // Increased limit for better analytics graphs
     writeDB(memoryDB);
 
     if (req.query.safe_redirect === '1') return res.redirect(302, link.safeUrl);
@@ -295,13 +295,13 @@ app.get('/:slug', (req, res) => {
 
   memoryDB.links[linkIndex].humanClicks = (memoryDB.links[linkIndex].humanClicks || 0) + 1;
   memoryDB.logs.unshift({ id: 'log_' + Date.now(), slug: link.slug, type: 'HUMAN', ua: ua.substring(0, 140), ip, action: `302 Redirect -> Target`, timestamp: new Date().toISOString() });
-  if (memoryDB.logs.length > 200) memoryDB.logs.pop();
+  if (memoryDB.logs.length > 2500) memoryDB.logs.pop();
   writeDB(memoryDB);
   return res.redirect(302, link.targetUrl);
 });
 
 // ==========================================
-// 6. DASHBOARD SPA (Includes Auth & 12 Modules)
+// 6. DASHBOARD SPA (Includes Auth & Chart.js)
 // ==========================================
 function renderDashboardHTML() {
   return `<!DOCTYPE html>
@@ -310,6 +310,7 @@ function renderDashboardHTML() {
   <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NexLink.io — 12-Module Enterprise Cloaker</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -348,7 +349,7 @@ function renderDashboardHTML() {
     </div>
   </div>
 
-  <!-- ================= 12-MODULE APP SCREEN ================= -->
+  <!-- ================= APP SCREEN ================= -->
   <div id="app-screen" class="hidden flex-1 flex flex-col w-full">
     
     <header class="sticky top-0 z-30 bg-zinc-950/85 backdrop-blur-md border-b border-zinc-800/80 px-6 py-3">
@@ -381,38 +382,57 @@ function renderDashboardHTML() {
 
     <main class="flex-1 max-w-7xl w-full mx-auto px-6 py-6 space-y-6">
 
-      <!-- MODULES 01 - 04: MINIMAL KPI STRIP -->
+      <!-- KPI STRIP -->
       <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4">
-          <div class="flex items-center justify-between text-[11px] text-zinc-500">
-            <span>01 / Active Links</span><i class="fa-solid fa-link text-zinc-600"></i>
-          </div>
+          <div class="flex items-center justify-between text-[11px] text-zinc-500"><span>01 / Active Links</span><i class="fa-solid fa-link text-zinc-600"></i></div>
           <div id="stat-total-links" class="text-2xl font-semibold text-white mt-1.5 mono">0</div>
         </div>
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4">
-          <div class="flex items-center justify-between text-[11px] text-zinc-500">
-            <span>02 / Human Clicks (302)</span><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-          </div>
+          <div class="flex items-center justify-between text-[11px] text-zinc-500"><span>02 / Human Clicks (302)</span><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span></div>
           <div id="stat-human-clicks" class="text-2xl font-semibold text-emerald-400 mt-1.5 mono">0</div>
         </div>
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4">
-          <div class="flex items-center justify-between text-[11px] text-zinc-500">
-            <span>03 / Bots Cloaked (OG)</span><span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-          </div>
+          <div class="flex items-center justify-between text-[11px] text-zinc-500"><span>03 / Bots Cloaked (OG)</span><span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span></div>
           <div id="stat-bot-hits" class="text-2xl font-semibold text-amber-400 mt-1.5 mono">0</div>
         </div>
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4">
-          <div class="flex items-center justify-between text-[11px] text-zinc-500">
-            <span>04 / Shield Efficiency</span><i class="fa-solid fa-shield-halved text-zinc-600"></i>
-          </div>
+          <div class="flex items-center justify-between text-[11px] text-zinc-500"><span>04 / Shield Efficiency</span><i class="fa-solid fa-shield-halved text-zinc-600"></i></div>
           <div id="stat-efficiency" class="text-2xl font-semibold text-zinc-100 mt-1.5 mono">100%</div>
         </div>
       </section>
 
-      <!-- MODULES 05 & 06: LINKS TABLE + LIVE SOCIAL PREVIEW VERIFIER -->
+      <!-- ADVANCED ANALYTICS GRAPH MODULE -->
+      <section class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div>
+            <span class="text-[10px] mono uppercase text-zinc-500">Advanced Analytics</span>
+            <h2 class="text-sm font-semibold text-white" id="analytics-title">Traffic Overview</h2>
+          </div>
+          <div class="flex items-center gap-2">
+            <div id="custom-date-picker" class="hidden items-center gap-2 mr-2">
+              <input type="date" id="chart-start" class="px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-[10px] text-zinc-300 focus:outline-none" />
+              <span class="text-zinc-500 text-[10px]">to</span>
+              <input type="date" id="chart-end" class="px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-[10px] text-zinc-300 focus:outline-none" />
+              <button onclick="renderAnalyticsChart()" class="px-2 py-1 rounded bg-zinc-800 text-[10px] text-white">Apply</button>
+            </div>
+            <select id="chart-timeframe" onchange="handleTimeframeChange()" class="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none">
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="3days">Last 3 Days</option>
+              <option value="7days" selected>Last 7 Days</option>
+              <option value="month">This Month</option>
+              <option value="custom">Custom Range</option>
+            </select>
+          </div>
+        </div>
+        <div class="w-full h-64 relative">
+          <canvas id="analyticsChart"></canvas>
+        </div>
+      </section>
+
+      <!-- LINKS TABLE + LIVE SOCIAL PREVIEW VERIFIER -->
       <section class="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        
-        <!-- Module 05: Routing Table (8 cols) -->
         <div class="lg:col-span-8 bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5 flex flex-col">
           <div class="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-zinc-800/80">
             <div>
@@ -438,7 +458,6 @@ function renderDashboardHTML() {
           </div>
         </div>
 
-        <!-- Module 06: Social Card Simulator (4 cols) -->
         <div class="lg:col-span-4 bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5 flex flex-col justify-between">
           <div>
             <div class="flex items-center justify-between mb-3">
@@ -449,9 +468,7 @@ function renderDashboardHTML() {
               <select id="simulator-slug-select" onchange="updateSimulatorCard()" class="px-2.5 py-1 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none"></select>
             </div>
             <div class="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 mb-4">
-              <div class="h-36 bg-zinc-900 relative overflow-hidden">
-                <img id="sim-og-img" src="https://placehold.co/1200x630/09090b/ffffff.png?text=Preview" alt="OG" class="w-full h-full object-cover" />
-              </div>
+              <div class="h-36 bg-zinc-900 relative overflow-hidden"><img id="sim-og-img" src="https://placehold.co/1200x630/09090b/ffffff.png?text=Preview" class="w-full h-full object-cover" /></div>
               <div class="p-3 border-t border-zinc-800/80">
                 <div id="sim-domain" class="text-[10px] mono uppercase text-zinc-500 truncate">nexlink.io</div>
                 <div id="sim-og-title" class="text-xs font-semibold text-white truncate mt-0.5">No link selected</div>
@@ -466,48 +483,31 @@ function renderDashboardHTML() {
         </div>
       </section>
 
-      <!-- MODULES 07, 08, 09: TELEMETRY, WAF SIGNATURES, TRAFFIC RATIO -->
+      <!-- MODULES 07, 08, 09: TELEMETRY & DOMAINS -->
       <section class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        
-        <!-- Module 07: Live Telemetry Stream -->
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5 flex flex-col h-72">
           <div class="flex items-center justify-between mb-3">
-            <div>
-              <span class="text-[10px] mono uppercase text-zinc-500">07 / Live Stream</span>
-              <h2 class="text-sm font-semibold text-white">Interception Logs</h2>
-            </div>
+            <div><span class="text-[10px] mono uppercase text-zinc-500">07 / Live Stream</span><h2 class="text-sm font-semibold text-white">Interception Logs</h2></div>
             <span class="text-[10px] mono text-zinc-500">Real-time</span>
           </div>
           <div id="logs-container" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
         </div>
-
-        <!-- Module 08: Traffic Distribution -->
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5 flex flex-col justify-between h-72">
           <div>
             <span class="text-[10px] mono uppercase text-zinc-500">08 / Traffic Ratio</span>
             <h2 class="text-sm font-semibold text-white mb-4">Human vs. Bot Distribution</h2>
             <div class="space-y-4">
               <div>
-                <div class="flex justify-between text-xs mb-1.5">
-                  <span class="text-zinc-300">Human Visitors (302 Target)</span><span id="bar-human-label" class="mono text-emerald-400">0 (50%)</span>
-                </div>
-                <div class="w-full h-2 rounded-full bg-zinc-950 overflow-hidden border border-zinc-800">
-                  <div id="bar-human" class="h-full bg-emerald-400 transition-all duration-500" style="width: 50%"></div>
-                </div>
+                <div class="flex justify-between text-xs mb-1.5"><span class="text-zinc-300">Human Visitors (302 Target)</span><span id="bar-human-label" class="mono text-emerald-400">0 (50%)</span></div>
+                <div class="w-full h-2 rounded-full bg-zinc-950 overflow-hidden border border-zinc-800"><div id="bar-human" class="h-full bg-emerald-400 transition-all duration-500" style="width: 50%"></div></div>
               </div>
               <div>
-                <div class="flex justify-between text-xs mb-1.5">
-                  <span class="text-zinc-300">Social Bots (OG Cloak)</span><span id="bar-bot-label" class="mono text-amber-400">0 (50%)</span>
-                </div>
-                <div class="w-full h-2 rounded-full bg-zinc-950 overflow-hidden border border-zinc-800">
-                  <div id="bar-bot" class="h-full bg-amber-400 transition-all duration-500" style="width: 50%"></div>
-                </div>
+                <div class="flex justify-between text-xs mb-1.5"><span class="text-zinc-300">Social Bots (OG Cloak)</span><span id="bar-bot-label" class="mono text-amber-400">0 (50%)</span></div>
+                <div class="w-full h-2 rounded-full bg-zinc-950 overflow-hidden border border-zinc-800"><div id="bar-bot" class="h-full bg-amber-400 transition-all duration-500" style="width: 50%"></div></div>
               </div>
             </div>
           </div>
         </div>
-
-        <!-- Module 09: Domains Panel -->
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5 flex flex-col h-72">
           <div class="mb-3">
             <span class="text-[10px] mono uppercase text-zinc-500">09 / Domain Registry</span>
@@ -521,43 +521,26 @@ function renderDashboardHTML() {
           </div>
           <div id="domains-list" class="flex-1 overflow-y-auto space-y-2 pr-1 text-xs"></div>
         </div>
-
       </section>
 
-      <!-- MODULES 10, 11, 12: COMPACT SYSTEM FOOTER MODULES -->
+      <!-- SYSTEM FOOTER MODULES -->
       <section class="grid grid-cols-1 md:grid-cols-3 gap-5">
-        
-        <!-- Module 10: User Profile -->
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <span class="text-[10px] mono uppercase text-zinc-500">10 / Session User</span>
-            <div id="session-email" class="text-xs font-medium text-white mt-0.5">user@example.com</div>
-          </div>
+          <div><span class="text-[10px] mono uppercase text-zinc-500">10 / Session User</span><div id="session-email" class="text-xs font-medium text-white mt-0.5">user@example.com</div></div>
           <span class="text-[10px] mono px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-zinc-400">Authenticated</span>
         </div>
-
-        <!-- Module 11: Persistence Engine -->
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <span class="text-[10px] mono uppercase text-zinc-500">11 / Permanent Storage</span>
-            <div id="storage-mode-label" class="text-xs font-medium text-white mt-0.5">Supabase + db.json</div>
-          </div>
+          <div><span class="text-[10px] mono uppercase text-zinc-500">11 / Permanent Storage</span><div id="storage-mode-label" class="text-xs font-medium text-white mt-0.5">Supabase + db.json</div></div>
         </div>
-
-        <!-- Module 12: Core API Status -->
         <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <span class="text-[10px] mono uppercase text-zinc-500">12 / Express Router</span>
-            <div class="text-xs font-medium text-white mono mt-0.5">/:slug + /api/og-image/:slug</div>
-          </div>
+          <div><span class="text-[10px] mono uppercase text-zinc-500">12 / Express Router</span><div class="text-xs font-medium text-white mono mt-0.5">/:slug + /api/og-image/:slug</div></div>
           <span class="text-[10px] mono px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">200 OK</span>
         </div>
-
       </section>
     </main>
   </div>
 
-  <!-- ================= SLEEK LINK CREATION MODAL ================= -->
+  <!-- LINK CREATION MODAL -->
   <div id="create-modal" class="fixed inset-0 z-[110] hidden bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
     <div class="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl my-8">
       <div class="flex items-center justify-between pb-4 border-b border-zinc-800">
@@ -577,28 +560,26 @@ function renderDashboardHTML() {
             </div>
             <div>
               <label class="block text-[11px] text-zinc-400 mb-1">Custom Alias / Slug</label>
-              <input id="form-slug" type="text" placeholder="custom-slug (optional)" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white mono focus:outline-none focus:border-zinc-600" />
+              <input id="form-slug" type="text" placeholder="custom-slug" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white mono focus:outline-none focus:border-zinc-600" />
             </div>
           </div>
-
           <div>
             <label class="block text-[11px] text-emerald-400 mb-1">Destination Target URL (Real Humans -> 302) *</label>
-            <input id="form-target" type="url" required placeholder="https://your-destination.com/offer" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-emerald-500" />
+            <input id="form-target" type="url" required class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-emerald-500" />
           </div>
           <div>
             <label class="block text-[11px] text-amber-400 mb-1">Safe Page URL (Fallback / Bot Safe Link) *</label>
-            <input id="form-safe" type="url" required placeholder="https://en.wikipedia.org/wiki/Computing" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-amber-500" />
+            <input id="form-safe" type="url" required class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-amber-500" />
           </div>
-
           <div class="pt-2 border-t border-zinc-800/80 space-y-3">
             <div class="text-[11px] font-medium text-zinc-300">Social Preview Metadata (Open Graph)</div>
             <div>
               <label class="block text-[11px] text-zinc-400 mb-1">OG Title *</label>
-              <input id="form-og-title" oninput="syncModalPreview()" type="text" required placeholder="Enter social card headline" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+              <input id="form-og-title" oninput="syncModalPreview()" type="text" required class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
             </div>
             <div>
               <label class="block text-[11px] text-zinc-400 mb-1">OG Description</label>
-              <textarea id="form-og-desc" oninput="syncModalPreview()" rows="2" placeholder="Enter social card summary..." class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600"></textarea>
+              <textarea id="form-og-desc" oninput="syncModalPreview()" rows="2" class="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600"></textarea>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -607,7 +588,7 @@ function renderDashboardHTML() {
               </div>
               <div>
                 <label class="block text-[11px] text-zinc-400 mb-1">Or Direct Image URL</label>
-                <input id="form-og-image-url" oninput="handleImageUrlInput()" type="url" placeholder="https://example.com/image.jpg" class="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+                <input id="form-og-image-url" oninput="handleImageUrlInput()" type="url" class="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
               </div>
             </div>
           </div>
@@ -641,6 +622,7 @@ function renderDashboardHTML() {
     let appState = { links: [], logs: [], stats: {}, cloud: {}, domains: [], user: null };
     let uploadedBase64Image = '';
     let isLoginMode = true;
+    let analyticsChartObj = null;
 
     // --- AUTH LOGIC ---
     function getToken() { return localStorage.getItem('nexlink_token'); }
@@ -691,18 +673,20 @@ function renderDashboardHTML() {
         document.getElementById('auth-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.remove('hidden');
         
-        // Roles & UI Setup
         const rb = document.getElementById('role-badge');
         rb.textContent = appState.user.role;
         rb.className = appState.user.role === 'manager' 
           ? 'text-[9px] mono px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase'
           : 'text-[9px] mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 uppercase';
-        document.getElementById('session-email').textContent = appState.user.email;
         
+        document.getElementById('session-email').textContent = appState.user.email;
+        document.getElementById('analytics-title').textContent = appState.user.role === 'manager' ? 'Team Traffic Overview (All Links)' : 'Your Traffic Overview (My Links)';
+
         if (appState.user.role === 'manager') document.getElementById('manager-domain-controls').classList.remove('hidden');
 
         renderCloudStatus();
         renderStats();
+        renderAnalyticsChart();
         renderLinksTable();
         renderLogs();
         populateDomainDropdown();
@@ -711,18 +695,86 @@ function renderDashboardHTML() {
       } catch (e) { console.error(e); }
     }
 
+    // --- ANALYTICS GRAPH LOGIC ---
+    function handleTimeframeChange() {
+      const val = document.getElementById('chart-timeframe').value;
+      const customDiv = document.getElementById('custom-date-picker');
+      if (val === 'custom') customDiv.classList.replace('hidden', 'flex');
+      else { customDiv.classList.replace('flex', 'hidden'); renderAnalyticsChart(); }
+    }
+
+    function filterLogsByDate(logs, rangeStr) {
+      let start = new Date(); let end = new Date();
+      if (rangeStr === 'today') { start.setHours(0,0,0,0); } 
+      else if (rangeStr === 'yesterday') { start.setDate(start.getDate() - 1); start.setHours(0,0,0,0); end.setDate(end.getDate() - 1); end.setHours(23,59,59,999); } 
+      else if (rangeStr === '3days') { start.setDate(start.getDate() - 3); start.setHours(0,0,0,0); } 
+      else if (rangeStr === '7days') { start.setDate(start.getDate() - 7); start.setHours(0,0,0,0); } 
+      else if (rangeStr === 'month') { start.setDate(1); start.setHours(0,0,0,0); } 
+      else if (rangeStr === 'custom') {
+        const cStart = document.getElementById('chart-start').value;
+        const cEnd = document.getElementById('chart-end').value;
+        if(cStart) { start = new Date(cStart); start.setHours(0,0,0,0); }
+        if(cEnd) { end = new Date(cEnd); end.setHours(23,59,59,999); }
+      }
+      return logs.filter(l => { const d = new Date(l.timestamp); return d >= start && d <= end; });
+    }
+
+    function renderAnalyticsChart() {
+      const range = document.getElementById('chart-timeframe').value;
+      const filteredLogs = filterLogsByDate(appState.logs, range);
+      
+      const grouped = {};
+      filteredLogs.forEach(log => {
+        const d = new Date(log.timestamp);
+        // Group by hour for 'today' or 'yesterday', else by date
+        const key = (range === 'today' || range === 'yesterday') 
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+          : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        
+        if (!grouped[key]) grouped[key] = { human: 0, bot: 0 };
+        if (log.type === 'HUMAN') grouped[key].human++;
+        else grouped[key].bot++;
+      });
+
+      const labels = Object.keys(grouped).sort((a,b) => {
+        if(range === 'today' || range === 'yesterday') return a.localeCompare(b);
+        return new Date(a + " " + new Date().getFullYear()) - new Date(b + " " + new Date().getFullYear());
+      });
+      const humanData = labels.map(l => grouped[l].human);
+      const botData = labels.map(l => grouped[l].bot);
+
+      const ctx = document.getElementById('analyticsChart').getContext('2d');
+      if (analyticsChartObj) analyticsChartObj.destroy();
+      
+      Chart.defaults.color = '#a1a1aa';
+      Chart.defaults.font.family = 'Inter';
+      
+      analyticsChartObj = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: 'Human Clicks (302)', data: humanData, borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', borderWidth: 2, fill: true, tension: 0.3, pointBackgroundColor: '#34d399' },
+            { label: 'Bot Interceptions (OG)', data: botData, borderColor: '#fbbf24', backgroundColor: 'rgba(251, 191, 36, 0.1)', borderWidth: 2, fill: true, tension: 0.3, pointBackgroundColor: '#fbbf24' }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'top', labels: { boxWidth: 12, usePointStyle: true } } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: '#27272a' }, ticks: { stepSize: 1 } },
+            x: { grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    // --- OTHER UI LOGIC ---
     function renderCloudStatus() {
-      const dot = document.getElementById('cloud-dot');
-      const txt = document.getElementById('cloud-status-text');
-      const modeLabel = document.getElementById('storage-mode-label');
       if (appState.cloud && appState.cloud.enabled) {
-        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
-        txt.textContent = 'Supabase Sync';
-        modeLabel.innerHTML = '<span class="text-emerald-400">Supabase Cloud</span> + db.json';
-      } else {
-        dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400';
-        txt.textContent = 'Local Storage Only';
-        modeLabel.innerHTML = 'Local <code class="mono text-zinc-300">db.json</code>';
+        document.getElementById('cloud-dot').className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
+        document.getElementById('cloud-status-text').textContent = 'Supabase Sync';
+        document.getElementById('storage-mode-label').innerHTML = '<span class="text-emerald-400">Supabase Cloud</span> + db.json';
       }
     }
 
@@ -745,48 +797,33 @@ function renderDashboardHTML() {
       const tbody = document.getElementById('links-table-body');
       const filter = (document.getElementById('search-links').value || '').toLowerCase();
       const filtered = appState.links.filter(l => l.slug.toLowerCase().includes(filter) || l.targetUrl.toLowerCase().includes(filter));
-      if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-zinc-500">No active links. Click "New Link" to create one.</td></tr>'; return; }
-
-      tbody.innerHTML = filtered.map(link => {
-        const shortUrl = \`https://\${link.domain}/\${link.slug}\`;
-        const imgThumb = link.ogImage ? (link.ogImage.startsWith('data:image') ? \`/api/og-image/\${link.slug}?v=\${link.id}\` : link.ogImage) : 'https://placehold.co/120x63/09090b/ffffff.png?text=OG';
-        return \`
-          <tr class="hover:bg-zinc-900/60 transition">
-            <td class="py-3 px-2">
-              <div class="flex items-center gap-1.5">
-                <span class="font-medium text-white mono">/\${link.slug}</span>
-                <button onclick="copyToClipboard('\${shortUrl}')" class="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-[10px]">Copy</button>
-              </div>
-              <div class="text-[9px] text-zinc-500 mono mt-0.5">\${link.domain}</div>
-            </td>
-            <td class="py-3 px-2 max-w-[180px]">
-              <div class="truncate text-emerald-400 text-[11px]" title="Target: \${link.targetUrl}">→ \${link.targetUrl}</div>
-              <div class="truncate text-zinc-500 text-[10px]" title="Safe: \${link.safeUrl}">Safe: \${link.safeUrl}</div>
-            </td>
-            <td class="py-3 px-2 text-[10px] text-zinc-400 truncate max-w-[100px]">\${link.creatorEmail || 'System'}</td>
-            <td class="py-3 px-2 text-center mono text-emerald-400">\${link.humanClicks || 0}</td>
-            <td class="py-3 px-2 text-center mono text-amber-400">\${link.botHits || 0}</td>
-            <td class="py-3 px-2 text-right whitespace-nowrap space-x-1">
-              <button onclick="deleteLink('\${link.slug}')" class="px-2 py-1 rounded bg-zinc-900 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 text-[10px]">Del</button>
-            </td>
-          </tr>\`;
-      }).join('');
+      if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-zinc-500">No active links.</td></tr>'; return; }
+      tbody.innerHTML = filtered.map(link => \`
+        <tr class="hover:bg-zinc-900/60 transition">
+          <td class="py-3 px-2">
+            <div class="flex items-center gap-1.5"><span class="font-medium text-white mono">/\${link.slug}</span><button onclick="copyToClipboard('https://\${link.domain}/\${link.slug}')" class="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-[10px]">Copy</button></div>
+            <div class="text-[9px] text-zinc-500 mono mt-0.5">\${link.domain}</div>
+          </td>
+          <td class="py-3 px-2 max-w-[180px]">
+            <div class="truncate text-emerald-400 text-[11px]">→ \${link.targetUrl}</div><div class="truncate text-zinc-500 text-[10px]">Safe: \${link.safeUrl}</div>
+          </td>
+          <td class="py-3 px-2 text-[10px] text-zinc-400 truncate max-w-[100px]">\${link.creatorEmail || 'System'}</td>
+          <td class="py-3 px-2 text-center mono text-emerald-400">\${link.humanClicks || 0}</td>
+          <td class="py-3 px-2 text-center mono text-amber-400">\${link.botHits || 0}</td>
+          <td class="py-3 px-2 text-right whitespace-nowrap"><button onclick="deleteLink('\${link.slug}')" class="px-2 py-1 rounded bg-zinc-900 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 text-[10px]">Del</button></td>
+        </tr>\`).join('');
     }
 
     function renderLogs() {
       const container = document.getElementById('logs-container');
-      if (!appState.logs || !appState.logs.length) { container.innerHTML = '<div class="text-xs text-zinc-600 text-center py-8">No requests logged yet.</div>'; return; }
-      container.innerHTML = appState.logs.map(log => {
-        const isBot = log.type === 'BOT';
-        const color = isBot ? 'text-amber-400' : 'text-emerald-400';
-        return \`<div class="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800/70 text-[11px] flex items-center justify-between gap-2">
-            <div class="truncate"><span class="mono font-semibold \${color}">[\${log.type}]</span><span class="mono text-white ml-1">/\${log.slug}</span></div>
+      const limitedLogs = appState.logs.slice(0, 100);
+      if (!limitedLogs.length) { container.innerHTML = '<div class="text-xs text-zinc-600 text-center py-8">No requests logged yet.</div>'; return; }
+      container.innerHTML = limitedLogs.map(log => \`<div class="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800/70 text-[11px] flex items-center justify-between gap-2">
+            <div class="truncate"><span class="mono font-semibold \${log.type === 'BOT' ? 'text-amber-400' : 'text-emerald-400'}">[\${log.type}]</span><span class="mono text-white ml-1">/\${log.slug}</span></div>
             <span class="mono text-[10px] text-zinc-600 shrink-0">\${new Date(log.timestamp).toLocaleTimeString()}</span>
-          </div>\`;
-      }).join('');
+          </div>\`).join('');
     }
 
-    // --- DOMAINS LOGIC ---
     function populateDomainDropdown() {
       const select = document.getElementById('form-domain');
       let opts = \`<option value="\${window.location.host}">\${window.location.host}</option>\`;
@@ -808,28 +845,22 @@ function renderDashboardHTML() {
       if (!val) return;
       const res = await fetch('/api/domains', { method: 'POST', headers: { 'Authorization': \`Bearer \${getToken()}\`, 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: val }) });
       if (res.ok) { document.getElementById('new-domain-input').value = ''; bootApp(); }
-      else { const d = await res.json(); alert(d.error); }
     }
     
     async function deleteCustomDomain(domain) {
       if (!confirm(\`Remove domain \${domain}?\`)) return;
-      await fetch(\`/api/domains/\${domain}\`, { method: 'DELETE', headers: { 'Authorization': \`Bearer \${getToken()}\` } });
-      bootApp();
+      await fetch(\`/api/domains/\${domain}\`, { method: 'DELETE', headers: { 'Authorization': \`Bearer \${getToken()}\` } }); bootApp();
     }
 
-    // --- LINK CREATION & SIMULATION ---
     function populateSimulatorSelect() {
-      const select = document.getElementById('simulator-slug-select');
-      const prev = select.value;
+      const select = document.getElementById('simulator-slug-select'); const prev = select.value;
       if (!appState.links.length) { select.innerHTML = '<option value="">No links</option>'; return; }
       select.innerHTML = appState.links.map(l => \`<option value="\${l.slug}">/\${l.slug}</option>\`).join('');
-      if (prev && appState.links.some(l => l.slug === prev)) select.value = prev;
-      updateSimulatorCard();
+      if (prev && appState.links.some(l => l.slug === prev)) select.value = prev; updateSimulatorCard();
     }
 
     function updateSimulatorCard() {
-      const slug = document.getElementById('simulator-slug-select').value;
-      const link = appState.links.find(l => l.slug === slug);
+      const link = appState.links.find(l => l.slug === document.getElementById('simulator-slug-select').value);
       if (!link) return;
       document.getElementById('sim-domain').textContent = link.domain || window.location.host;
       document.getElementById('sim-og-title').textContent = link.ogTitle || 'Untitled';
@@ -840,9 +871,7 @@ function renderDashboardHTML() {
     function triggerSimulatedVisit(mode) {
       const slug = document.getElementById('simulator-slug-select').value;
       if (!slug) return;
-      if (mode === 'bot') window.open(\`/\${slug}?bot_preview=1\`, '_blank');
-      else window.open(\`/\${slug}\`, '_blank');
-      setTimeout(bootApp, 800);
+      window.open(mode === 'bot' ? \`/\${slug}?bot_preview=1\` : \`/\${slug}\`, '_blank'); setTimeout(bootApp, 800);
     }
 
     function openCreateModal() { document.getElementById('form-error').classList.add('hidden'); document.getElementById('create-modal').classList.remove('hidden'); syncModalPreview(); }
@@ -856,17 +885,13 @@ function renderDashboardHTML() {
       reader.onload = function(evt) {
         const img = new Image();
         img.onload = function() {
-          const canvas = document.createElement('canvas');
-          const maxW = 1200; const scale = img.width > maxW ? maxW / img.width : 1;
+          const canvas = document.createElement('canvas'); const scale = img.width > 1200 ? 1200 / img.width : 1;
           canvas.width = Math.round(img.width * scale); canvas.height = Math.round(img.height * scale);
           canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
           uploadedBase64Image = canvas.toDataURL('image/jpeg', 0.85);
-          document.getElementById('form-og-image-url').value = '';
-          syncModalPreview();
-        };
-        img.src = evt.target.result;
-      };
-      reader.readAsDataURL(file);
+          document.getElementById('form-og-image-url').value = ''; syncModalPreview();
+        }; img.src = evt.target.result;
+      }; reader.readAsDataURL(file);
     }
 
     function syncModalPreview() {
@@ -896,8 +921,7 @@ function renderDashboardHTML() {
 
     async function deleteLink(slug) {
       if (!confirm(\`Delete /\${slug}?\`)) return;
-      await fetch(\`/api/delete-link/\${slug}\`, { method: 'DELETE', headers: { 'Authorization': \`Bearer \${getToken()}\` } });
-      bootApp();
+      await fetch(\`/api/delete-link/\${slug}\`, { method: 'DELETE', headers: { 'Authorization': \`Bearer \${getToken()}\` } }); bootApp();
     }
 
     function copyToClipboard(text) {
@@ -914,5 +938,5 @@ function renderDashboardHTML() {
 
 // BOOT
 pullFromSupabase().then(() => {
-  app.listen(PORT, () => { console.log(`🚀 NexLink Auth Engine running on port ${PORT}`); });
+  app.listen(PORT, () => { console.log(`🚀 NexLink Auth & Analytics Engine running on port ${PORT}`); });
 });
