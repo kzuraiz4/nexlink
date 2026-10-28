@@ -136,7 +136,6 @@ function getBaseUrl(req) {
 // ==========================================
 // 4. API ENDPOINTS
 // ==========================================
-
 app.post('/api/auth/signup', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required.' });
@@ -172,7 +171,7 @@ app.get('/api/get-data', requireAuth, (req, res) => {
     user: { email: user.email, role: user.role },
     cloud: { enabled: IS_SUPABASE_ENABLED, lastSync: lastCloudSync },
     links: accessibleLinks,
-    logs: accessibleLogs, // Returns all accessible logs to calculate Unique clicks & Timeframes
+    logs: accessibleLogs,
     domains: memoryDB.domains
   });
 });
@@ -267,7 +266,6 @@ app.get('/:slug', (req, res) => {
   const currentShortUrl = `https://${req.get('host')}/${link.slug}`;
   const botDetected = req.query.bot_preview === '1' || req.query.safe_redirect === '1' || isBotUserAgent(ua);
 
-  // INCREASED LOG LIMIT TO 6000 TO SUPPORT 30-DAY ANALYTICS ACCURATELY
   if (botDetected) {
     memoryDB.links[linkIndex].botHits = (memoryDB.links[linkIndex].botHits || 0) + 1;
     memoryDB.logs.unshift({ id: 'log_' + Date.now(), slug: link.slug, type: 'BOT', ip, timestamp: new Date().toISOString() });
@@ -297,7 +295,7 @@ app.get('/:slug', (req, res) => {
 });
 
 // ==========================================
-// 6. DASHBOARD SPA (Includes UI Upgrades)
+// 6. DASHBOARD SPA (Tabbed Multi-Page UI)
 // ==========================================
 function renderDashboardHTML() {
   return `<!DOCTYPE html>
@@ -315,11 +313,15 @@ function renderDashboardHTML() {
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 9999px; }
+    .nav-tab { border-bottom: 2px solid transparent; color: #a1a1aa; }
+    .nav-tab.active { border-bottom-color: #34d399; color: #fafafa; }
+    .page-section { display: none; }
+    .page-section.active { display: block; }
   </style>
 </head>
 <body class="min-h-screen flex flex-col antialiased selection:bg-white selection:text-zinc-950">
 
-  <!-- ================= AUTH OVERLAY ================= -->
+  <!-- AUTHENTICATION -->
   <div id="auth-screen" class="fixed inset-0 z-[100] bg-zinc-950 flex flex-col items-center justify-center p-6">
     <div class="w-full max-w-sm bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8">
       <div class="text-center mb-6">
@@ -337,11 +339,11 @@ function renderDashboardHTML() {
     </div>
   </div>
 
-  <!-- ================= APP SCREEN ================= -->
+  <!-- MAIN APP CONTAINER -->
   <div id="app-screen" class="hidden flex-1 flex flex-col w-full">
     
-    <header class="sticky top-0 z-30 bg-zinc-950/85 backdrop-blur-md border-b border-zinc-800/80 px-6 py-3">
-      <div class="max-w-7xl mx-auto flex items-center justify-between">
+    <header class="sticky top-0 z-30 bg-zinc-950/85 backdrop-blur-md border-b border-zinc-800/80">
+      <div class="px-6 py-3 max-w-7xl mx-auto flex items-center justify-between">
         <div class="flex items-center gap-3">
           <div class="w-7 h-7 rounded-lg bg-white text-zinc-950 flex items-center justify-center font-bold text-xs">N</div>
           <div class="flex items-center gap-2">
@@ -349,7 +351,6 @@ function renderDashboardHTML() {
             <span id="role-badge" class="text-[9px] mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 uppercase">Role</span>
           </div>
         </div>
-
         <div class="flex items-center gap-2.5">
           <div id="cloud-badge" class="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-400">
             <span id="cloud-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span id="cloud-status-text">Cloud Sync</span>
@@ -362,115 +363,137 @@ function renderDashboardHTML() {
           </button>
         </div>
       </div>
+      <!-- Tab Navigation -->
+      <div class="px-6 max-w-7xl mx-auto flex gap-6 text-xs font-medium">
+        <button onclick="switchTab('overview')" id="tab-overview" class="nav-tab active pb-2.5 px-1 transition">Overview</button>
+        <button onclick="switchTab('links')" id="tab-links" class="nav-tab pb-2.5 px-1 transition">Links</button>
+        <button onclick="switchTab('domains')" id="tab-domains" class="nav-tab pb-2.5 px-1 transition hidden">Domains</button>
+      </div>
     </header>
 
-    <main class="flex-1 max-w-7xl w-full mx-auto px-6 py-6 space-y-6">
+    <main class="flex-1 max-w-7xl w-full mx-auto px-6 py-6">
 
-      <!-- ================= TOP KPI TRACKER ================= -->
-      <div>
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-sm font-semibold text-white">Performance Metrics</h2>
-          <select id="kpi-timeframe" onchange="updateKPIsAndChart()" class="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none">
-            <option value="today">Today</option>
-            <option value="yesterday">Yesterday</option>
-            <option value="7days">Last 7 Days</option>
-            <option value="30days">Last 30 Days</option>
-            <option value="alltime" selected>All Time</option>
-          </select>
+      <!-- ================= PAGE 1: OVERVIEW ================= -->
+      <div id="page-overview" class="page-section active space-y-6">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-white">Performance Metrics</h2>
+            <select id="kpi-timeframe" onchange="updateKPIsAndChart()" class="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none">
+              <option value="today">Today</option>
+              <option value="yesterday">Yesterday</option>
+              <option value="7days">Last 7 Days</option>
+              <option value="30days">Last 30 Days</option>
+              <option value="alltime" selected>All Time</option>
+            </select>
+          </div>
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
+              <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2"><span class="font-medium">Total clicks</span><i class="fa-solid fa-arrow-pointer"></i></div>
+              <div id="kpi-total" class="text-2xl font-bold text-white mt-1">0</div>
+            </div>
+            <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
+              <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2"><span class="font-medium">Unique</span><i class="fa-solid fa-user-group"></i></div>
+              <div id="kpi-unique" class="text-2xl font-bold text-white mt-1">0</div>
+            </div>
+            <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
+              <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2"><span class="font-medium">Human</span><i class="fa-solid fa-user-check"></i></div>
+              <div id="kpi-human" class="text-2xl font-bold text-white mt-1">0</div>
+            </div>
+            <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
+              <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2"><span class="font-medium">Bots</span><i class="fa-solid fa-robot"></i></div>
+              <div id="kpi-bots" class="text-2xl font-bold text-white mt-1">0</div>
+            </div>
+          </div>
         </div>
-        
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
-            <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2">
-              <span class="font-medium">Total clicks</span><i class="fa-solid fa-arrow-pointer"></i>
-            </div>
-            <div id="kpi-total" class="text-2xl font-bold text-white mt-1">0</div>
+
+        <section class="bg-[#121214] border border-zinc-800/80 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between mb-4"><h2 class="text-sm font-semibold text-white">Click Volume Trend</h2></div>
+          <div class="w-full h-56 relative"><canvas id="simpleAnalyticsChart"></canvas></div>
+        </section>
+
+        <section class="bg-[#121214] border border-zinc-800/80 rounded-xl p-5 flex flex-col shadow-sm">
+          <div class="mb-4"><span class="text-[10px] mono uppercase text-zinc-500">System Info</span><h2 class="text-sm font-semibold text-white">Workspace Details</h2></div>
+          <div class="space-y-3">
+             <div class="flex justify-between text-xs border-b border-zinc-800/50 pb-2"><span class="text-zinc-400">Account Session</span><span id="session-email" class="text-white font-medium"></span></div>
+             <div class="flex justify-between text-xs border-b border-zinc-800/50 pb-2"><span class="text-zinc-400">Role Authority</span><span id="session-role" class="text-emerald-400 font-medium uppercase"></span></div>
+             <div class="flex justify-between text-xs pb-2"><span class="text-zinc-400">Database Sync Module</span><span id="storage-mode-label" class="text-white"></span></div>
           </div>
-          <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
-            <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2">
-              <span class="font-medium">Unique</span><i class="fa-solid fa-user-group"></i>
-            </div>
-            <div id="kpi-unique" class="text-2xl font-bold text-white mt-1">0</div>
+        </section>
+      </div>
+
+      <!-- ================= PAGE 2: LINKS (WITH CREATOR COL) ================= -->
+      <div id="page-links" class="page-section space-y-6">
+        <section class="bg-[#121214] border border-zinc-800/80 rounded-xl overflow-hidden shadow-sm flex flex-col">
+          <div class="p-4 border-b border-zinc-800/80 flex flex-wrap justify-between items-center gap-3 bg-zinc-900/20">
+            <h2 class="text-sm font-semibold text-white">Link Performance Activity</h2>
+            <input id="search-links" oninput="renderLinksTable()" type="text" placeholder="Search title or domain..." class="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none w-52" />
           </div>
-          <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
-            <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2">
-              <span class="font-medium">Human</span><i class="fa-solid fa-user-check"></i>
-            </div>
-            <div id="kpi-human" class="text-2xl font-bold text-white mt-1">0</div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse whitespace-nowrap">
+              <thead class="bg-zinc-900/40">
+                <tr class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide border-b border-zinc-800/80">
+                  <th class="py-3 px-4">LINK / DESTINATION</th>
+                  <th class="py-3 px-4">CREATOR</th>
+                  <th class="py-3 px-4 text-center">Today</th>
+                  <th class="py-3 px-4 text-center">Yesterday</th>
+                  <th class="py-3 px-4 text-center">Last 7 days</th>
+                  <th class="py-3 px-4 text-center">Last 15 days</th>
+                  <th class="py-3 px-4 text-center">Last 30 days</th>
+                  <th class="py-3 px-4 text-center">Last month</th>
+                  <th class="py-3 px-4 text-center">All time</th>
+                  <th class="py-3 px-4 text-center">Status</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="links-table-body" class="divide-y divide-zinc-800/40 text-sm"></tbody>
+            </table>
           </div>
-          <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
-            <div class="flex items-center justify-between text-[11px] text-zinc-400 mb-2">
-              <span class="font-medium">Bots</span><i class="fa-solid fa-robot"></i>
+        </section>
+
+        <!-- Social Card Simulator integrated below the table -->
+        <div class="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-5 flex flex-col max-w-sm">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <span class="text-[10px] mono uppercase text-zinc-500">Preview Verifier</span>
+              <h2 class="text-sm font-semibold text-white">Social Scraper Card</h2>
             </div>
-            <div id="kpi-bots" class="text-2xl font-bold text-white mt-1">0</div>
+            <select id="simulator-slug-select" onchange="updateSimulatorCard()" class="px-2.5 py-1 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none"></select>
+          </div>
+          <div class="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 mb-4">
+            <div class="h-36 bg-zinc-900 relative overflow-hidden"><img id="sim-og-img" src="https://placehold.co/1200x630/09090b/ffffff.png?text=Preview" class="w-full h-full object-cover" /></div>
+            <div class="p-3 border-t border-zinc-800/80">
+              <div id="sim-domain" class="text-[10px] mono uppercase text-zinc-500 truncate">nexlink.io</div>
+              <div id="sim-og-title" class="text-xs font-semibold text-white truncate mt-0.5">No link selected</div>
+              <div id="sim-og-desc" class="text-[11px] text-zinc-400 line-clamp-2 mt-0.5">Create a link to verify its social preview card.</div>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2 pt-3 border-t border-zinc-800/80">
+            <button onclick="triggerSimulatedVisit('human')" class="px-2.5 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-emerald-400 border border-zinc-800 text-[11px] font-medium transition">302 Human</button>
+            <button onclick="triggerSimulatedVisit('bot')" class="px-2.5 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-amber-400 border border-zinc-800 text-[11px] font-medium transition">OG Bot Card</button>
           </div>
         </div>
       </div>
 
-      <!-- ================= OPTIMIZED ANALYTICS GRAPH ================= -->
-      <section class="bg-[#121214] border border-zinc-800/80 rounded-xl p-5 shadow-sm">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-semibold text-white">Click Volume Trend</h2>
-        </div>
-        <div class="w-full h-56 relative">
-          <canvas id="simpleAnalyticsChart"></canvas>
-        </div>
-      </section>
-
-      <!-- ================= DETAILED ROUTING TABLE (TIME-SERIES) ================= -->
-      <section class="bg-[#121214] border border-zinc-800/80 rounded-xl overflow-hidden shadow-sm flex flex-col">
-        <div class="p-4 border-b border-zinc-800/80 flex justify-between items-center bg-zinc-900/20">
-          <h2 class="text-sm font-semibold text-white">Link Performance Activity</h2>
-          <input id="search-links" oninput="renderLinksTable()" type="text" placeholder="Search title or domain..." class="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 focus:outline-none w-52" />
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-left border-collapse whitespace-nowrap">
-            <thead class="bg-zinc-900/40">
-              <tr class="text-[11px] font-semibold text-zinc-400 uppercase tracking-wide border-b border-zinc-800/80">
-                <th class="py-3 px-4">LINK / DESTINATION</th>
-                <th class="py-3 px-4 text-center">Today</th>
-                <th class="py-3 px-4 text-center">Yesterday</th>
-                <th class="py-3 px-4 text-center">Last 7 days</th>
-                <th class="py-3 px-4 text-center">Last 15 days</th>
-                <th class="py-3 px-4 text-center">Last 30 days</th>
-                <th class="py-3 px-4 text-center">Last month</th>
-                <th class="py-3 px-4 text-center">All time</th>
-                <th class="py-3 px-4 text-center">Status</th>
-                <th class="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="links-table-body" class="divide-y divide-zinc-800/40 text-sm"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- FOOTER / DOMAINS / SYSTEM -->
-      <section class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-5 flex flex-col h-64 shadow-sm">
-          <div class="mb-3"><span class="text-[10px] mono uppercase text-zinc-500">Domain Registry</span><h2 class="text-sm font-semibold text-white">Custom Routing Domains</h2></div>
-          <div id="manager-domain-controls" class="hidden mb-3 pb-3 border-b border-zinc-800/80">
-            <div class="flex gap-2">
-              <input type="text" id="new-domain-input" placeholder="links.brand.com" class="flex-1 px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
-              <button onclick="addCustomDomain()" class="px-3 py-1.5 rounded-lg bg-white text-zinc-950 text-xs font-semibold transition">Add</button>
-            </div>
+      <!-- ================= PAGE 3: DOMAINS (Manager Only) ================= -->
+      <div id="page-domains" class="page-section space-y-6">
+        <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-5 shadow-sm max-w-3xl">
+          <div class="mb-5 border-b border-zinc-800/80 pb-4">
+            <span class="text-[10px] mono uppercase text-zinc-500">Domain Registry</span>
+            <h2 class="text-sm font-semibold text-white mb-2">Custom Routing Domains</h2>
+            <p class="text-xs text-zinc-400">Map custom domains to your links. Ensure DNS A-Records point to this Render server before adding.</p>
           </div>
-          <div id="domains-list" class="flex-1 overflow-y-auto space-y-2 pr-1 text-xs"></div>
-        </div>
-        
-        <div class="bg-[#121214] border border-zinc-800/80 rounded-xl p-5 flex flex-col justify-between h-64 shadow-sm">
-          <div><span class="text-[10px] mono uppercase text-zinc-500">System Info</span><h2 class="text-sm font-semibold text-white mb-4">Workspace Details</h2></div>
-          <div class="space-y-3">
-             <div class="flex justify-between text-xs border-b border-zinc-800/50 pb-2"><span class="text-zinc-400">Account</span><span id="session-email" class="text-white font-medium"></span></div>
-             <div class="flex justify-between text-xs border-b border-zinc-800/50 pb-2"><span class="text-zinc-400">Role Authority</span><span id="session-role" class="text-emerald-400 font-medium uppercase"></span></div>
-             <div class="flex justify-between text-xs pb-2"><span class="text-zinc-400">Database Sync</span><span id="storage-mode-label" class="text-white"></span></div>
+          <div class="flex gap-2 mb-6">
+            <input type="text" id="new-domain-input" placeholder="links.brand.com" class="flex-1 px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-white focus:outline-none focus:border-zinc-600" />
+            <button onclick="addCustomDomain()" class="px-4 py-2 rounded-lg bg-white text-zinc-950 text-xs font-semibold transition">Add Domain</button>
           </div>
+          <div id="domains-list" class="space-y-2 text-xs"></div>
         </div>
-      </section>
+      </div>
 
     </main>
   </div>
 
-  <!-- LINK CREATION MODAL -->
+  <!-- MODAL: LINK CREATION -->
   <div id="create-modal" class="fixed inset-0 z-[110] hidden bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
     <div class="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl my-8">
       <div class="flex items-center justify-between pb-4 border-b border-zinc-800">
@@ -528,7 +551,6 @@ function renderDashboardHTML() {
             <button type="submit" class="px-4 py-2 rounded-lg bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition">Deploy Link</button>
           </div>
         </div>
-
         <div class="lg:col-span-5 bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 flex flex-col justify-between">
           <div>
             <span class="text-[10px] mono uppercase text-zinc-500">Live Social Card Preview</span>
@@ -553,6 +575,15 @@ function renderDashboardHTML() {
     let uploadedBase64Image = '';
     let isLoginMode = true;
     let simpleChartObj = null;
+
+    // --- TAB SYSTEM ---
+    function switchTab(tabId) {
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+      
+      document.getElementById('tab-' + tabId).classList.add('active');
+      document.getElementById('page-' + tabId).classList.add('active');
+    }
 
     // --- AUTH LOGIC ---
     function getToken() { return localStorage.getItem('nexlink_token'); }
@@ -607,7 +638,13 @@ function renderDashboardHTML() {
         document.getElementById('session-email').textContent = appState.user.email;
         document.getElementById('session-role').textContent = appState.user.role;
 
-        if (appState.user.role === 'manager') document.getElementById('manager-domain-controls').classList.remove('hidden');
+        // Show/Hide Domains Tab based on Role
+        if (appState.user.role === 'manager') {
+          document.getElementById('tab-domains').classList.remove('hidden');
+        } else {
+          document.getElementById('tab-domains').classList.add('hidden');
+        }
+
         if (appState.cloud && appState.cloud.enabled) {
           document.getElementById('cloud-dot').className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
           document.getElementById('cloud-status-text').textContent = 'Supabase Sync';
@@ -618,6 +655,7 @@ function renderDashboardHTML() {
         renderLinksTable();
         populateDomainDropdown();
         renderDomainsList();
+        populateSimulatorSelect();
       } catch (e) { console.error(e); }
     }
 
@@ -633,7 +671,7 @@ function renderDashboardHTML() {
         start.setMonth(start.getMonth() - 1); start.setDate(1); start.setHours(0,0,0,0);
         end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59, 999);
       }
-      else return appState.logs; // All time
+      else return appState.logs; 
 
       return appState.logs.filter(l => { const d = new Date(l.timestamp); return d >= start && d <= end; });
     }
@@ -643,7 +681,6 @@ function renderDashboardHTML() {
       const range = document.getElementById('kpi-timeframe').value;
       const logsToUse = getFilteredLogs(range);
       
-      // Calculate KPIs
       let total = logsToUse.length;
       let human = 0; let bots = 0;
       let uniqueIps = new Set();
@@ -653,7 +690,6 @@ function renderDashboardHTML() {
         if (l.ip) uniqueIps.add(l.ip);
       });
 
-      // If 'alltime' is selected, we combine accurate DB counters to offset log truncation.
       if (range === 'alltime') {
         human = appState.links.reduce((acc, l) => acc + (l.humanClicks || 0), 0);
         bots = appState.links.reduce((acc, l) => acc + (l.botHits || 0), 0);
@@ -665,7 +701,6 @@ function renderDashboardHTML() {
       document.getElementById('kpi-bots').textContent = bots.toLocaleString();
       document.getElementById('kpi-unique').textContent = uniqueIps.size.toLocaleString();
 
-      // Render Simple Chart
       renderSimpleChart(logsToUse, range);
     }
 
@@ -710,7 +745,7 @@ function renderDashboardHTML() {
       });
     }
 
-    // --- DETAILED ROUTING TABLE ---
+    // --- DETAILED ROUTING TABLE (WITH CREATOR) ---
     function getLinkClicksForTimeframe(slug, rangeStr) {
       const logs = getFilteredLogs(rangeStr);
       return logs.filter(l => l.slug === slug).length;
@@ -719,14 +754,14 @@ function renderDashboardHTML() {
     function renderLinksTable() {
       const tbody = document.getElementById('links-table-body');
       const filter = (document.getElementById('search-links').value || '').toLowerCase();
-      const filtered = appState.links.filter(l => l.slug.toLowerCase().includes(filter) || (l.ogTitle || '').toLowerCase().includes(filter));
+      const filtered = appState.links.filter(l => l.slug.toLowerCase().includes(filter) || (l.ogTitle || '').toLowerCase().includes(filter) || (l.creatorEmail || '').toLowerCase().includes(filter));
       
-      if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="10" class="py-12 text-center text-zinc-500">No matching links found.</td></tr>'; return; }
+      if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="11" class="py-12 text-center text-zinc-500">No matching links found.</td></tr>'; return; }
 
       tbody.innerHTML = filtered.map(link => {
         const shortUrl = \`\${link.domain}/\${link.slug}\`;
+        const creator = link.creatorEmail || 'System';
         
-        // Calculate Time-Series Data from Logs
         const today = getLinkClicksForTimeframe(link.slug, 'today');
         const yesterday = getLinkClicksForTimeframe(link.slug, 'yesterday');
         const d7 = getLinkClicksForTimeframe(link.slug, '7days');
@@ -741,6 +776,9 @@ function renderDashboardHTML() {
               <div class="font-bold text-base text-white mb-0.5">\${link.ogTitle || 'Untitled'}</div>
               <div class="text-emerald-400 text-xs font-mono mb-1 cursor-pointer hover:underline" onclick="copyToClipboard('https://\${shortUrl}')">\${shortUrl}</div>
               <div class="text-zinc-500 text-[10px] truncate max-w-xs" title="\${link.targetUrl}">↳ \${link.targetUrl}</div>
+            </td>
+            <td class="py-4 px-4">
+              <div class="text-zinc-300 text-xs">\${creator}</div>
             </td>
             <td class="py-4 px-4 text-center font-bold text-white">\${today.toLocaleString()}</td>
             <td class="py-4 px-4 text-center font-bold text-white">\${yesterday.toLocaleString()}</td>
@@ -770,9 +808,9 @@ function renderDashboardHTML() {
     function renderDomainsList() {
       const container = document.getElementById('domains-list');
       if (!appState.domains.length) { container.innerHTML = '<div class="text-zinc-600 text-[11px] py-4">No custom domains added.</div>'; return; }
-      container.innerHTML = appState.domains.map(d => \`<div class="px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-          <div><div class="text-zinc-200">\${d.domain}</div><div class="text-[9px] text-zinc-500 mt-0.5">Added by \${d.addedBy}</div></div>
-          \${appState.user.role === 'manager' ? \`<button onclick="deleteCustomDomain('\${d.domain}')" class="text-rose-400 hover:text-rose-300"><i class="fa-solid fa-trash text-[10px]"></i></button>\` : ''}
+      container.innerHTML = appState.domains.map(d => \`<div class="px-4 py-3 rounded-xl bg-zinc-900/50 border border-zinc-800 flex items-center justify-between">
+          <div><div class="text-zinc-200 text-sm font-medium">\${d.domain}</div><div class="text-[10px] text-zinc-500 mt-1">Added by \${d.addedBy}</div></div>
+          \${appState.user.role === 'manager' ? \`<button onclick="deleteCustomDomain('\${d.domain}')" class="px-3 py-1.5 bg-rose-500/10 text-rose-400 rounded-lg hover:bg-rose-500/20 transition text-xs font-medium">Remove</button>\` : ''}
         </div>\`).join('');
     }
 
@@ -843,6 +881,29 @@ function renderDashboardHTML() {
       navigator.clipboard.writeText(text);
       const toast = document.getElementById('toast'); document.getElementById('toast-msg').textContent = 'Copied: ' + text;
       toast.classList.remove('hidden'); setTimeout(() => toast.classList.add('hidden'), 2500);
+    }
+    
+    // --- SIMULATOR ---
+    function populateSimulatorSelect() {
+      const select = document.getElementById('simulator-slug-select'); const prev = select.value;
+      if (!appState.links.length) { select.innerHTML = '<option value="">No links</option>'; return; }
+      select.innerHTML = appState.links.map(l => \`<option value="\${l.slug}">/\${l.slug}</option>\`).join('');
+      if (prev && appState.links.some(l => l.slug === prev)) select.value = prev; updateSimulatorCard();
+    }
+
+    function updateSimulatorCard() {
+      const link = appState.links.find(l => l.slug === document.getElementById('simulator-slug-select').value);
+      if (!link) return;
+      document.getElementById('sim-domain').textContent = link.domain || window.location.host;
+      document.getElementById('sim-og-title').textContent = link.ogTitle || 'Untitled';
+      document.getElementById('sim-og-desc').textContent = link.ogDesc || '';
+      document.getElementById('sim-og-img').src = link.ogImage ? (link.ogImage.startsWith('data:image') ? \`/api/og-image/\${link.slug}?v=\${link.id}\` : link.ogImage) : 'https://placehold.co/1200x630/09090b/ffffff.png?text=Preview';
+    }
+
+    function triggerSimulatedVisit(mode) {
+      const slug = document.getElementById('simulator-slug-select').value;
+      if (!slug) return;
+      window.open(mode === 'bot' ? \`/\${slug}?bot_preview=1\` : \`/\${slug}\`, '_blank'); setTimeout(bootApp, 800);
     }
 
     if (getToken()) bootApp();
